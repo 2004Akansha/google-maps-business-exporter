@@ -1,0 +1,43 @@
+{
+    "manifest_version": 3,
+
+    "name": "Google Maps Business Exporter",
+
+    "version": "1.0.0",
+
+    "description": "Collect business information displayed on Google Maps and export it as CSV.",
+
+    "permissions": [
+        "storage"
+    ],
+
+    "host_permissions": [
+        "https://www.google.com/maps/*",
+        "http://127.0.0.1:8000/*",
+        "http://localhost:8000/*"
+    ],
+
+    "background": {
+        "service_worker": "service-worker.js"
+    },
+
+    "action": {
+        "default_popup": "popup.html"
+    },
+
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.google.com/maps/*"
+            ],
+
+            "js": [
+                "api.js",
+                "review-photo-extractor.js",
+                "content.js"
+            ],
+
+            "run_at": "document_idle"
+        }
+    ]
+}

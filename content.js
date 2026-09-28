@@ -1,0 +1,5394 @@
+// ======================================================
+// GOOGLE MAPS BUSINESS EXPORTER - content.js
+// ======================================================
+
+console.log(
+    "Google Maps Business Exporter loaded."
+);
+
+// ======================================================
+// LARAVEL EXTRACTION CONFIGURATION
+// ======================================================
+
+let extractionConfig = {
+    jobId: null,
+    sourceId: null
+};
+
+// ======================================================
+// LOAD LARAVEL EXTRACTION CONFIGURATION
+// ======================================================
+
+async function loadExtractionConfig() {
+
+    return new Promise((resolve) => {
+
+        chrome.storage.local.get(
+            [
+                "extractionConfig"
+            ],
+            (result) => {
+
+                if (
+                    chrome.runtime.lastError
+                ) {
+
+                    console.error(
+                        "Could not load extraction config:",
+                        chrome.runtime.lastError
+                    );
+
+                    resolve(false);
+
+                    return;
+                }
+
+
+                if (
+                    result.extractionConfig
+                ) {
+
+                    extractionConfig =
+                        result.extractionConfig;
+
+                    console.log(
+                        "Laravel extraction config loaded:",
+                        extractionConfig
+                    );
+
+                    resolve(true);
+
+                    return;
+                }
+
+
+                console.warn(
+                    "No Laravel extraction configuration found."
+                );
+
+                resolve(false);
+
+            }
+        );
+
+    });
+
+}
+
+async function setTestExtractionConfig() {
+
+    extractionConfig = {
+        jobId: 1,
+        sourceId: 1
+    };
+
+    await new Promise((resolve) => {
+
+        chrome.storage.local.set(
+            {
+                extractionConfig:
+                    extractionConfig
+            },
+            resolve
+        );
+
+    });
+
+    console.log(
+        "TEST Laravel configuration:",
+        extractionConfig
+    );
+
+}
+
+// ======================================================
+// FUNCTION: Normalize Maps URL
+// ======================================================
+
+function normalizeMapsUrl(url) {
+
+    if (!url) {
+        return "";
+    }
+
+    try {
+
+        const parsedUrl =
+            new URL(url);
+
+        return (
+            parsedUrl.origin +
+            parsedUrl.pathname
+        );
+
+    } catch (error) {
+
+        return url;
+
+    }
+
+}
+
+// ======================================================
+// FUNCTION: Get unique business key
+// ======================================================
+
+function getBusinessKey(business) {
+
+    if (!business) {
+        return "";
+    }
+
+
+    // --------------------------------------------------
+    // Prefer Google Maps URL
+    // --------------------------------------------------
+
+    if (business.mapsUrl) {
+
+        const normalizedUrl =
+            normalizeMapsUrl(
+                business.mapsUrl
+            );
+
+        if (normalizedUrl) {
+            return normalizedUrl;
+        }
+
+    }
+
+
+    // --------------------------------------------------
+    // Fallback: name + address
+    // --------------------------------------------------
+
+    const name =
+        (business.name || "")
+            .trim()
+            .toLowerCase();
+
+    const address =
+        (business.address || "")
+            .trim()
+            .toLowerCase();
+
+
+    if (
+        name &&
+        address
+    ) {
+
+        return (
+            "name-address:" +
+            name +
+            "|" +
+            address
+        );
+
+    }
+
+
+    // --------------------------------------------------
+    // Last fallback: name only
+    // --------------------------------------------------
+
+    if (name) {
+
+        return (
+            "name:" +
+            name
+        );
+
+    }
+
+
+    return "";
+
+}
+
+function uniqueStrings(values = []) {
+
+    const result = new Set();
+
+    for (const value of values) {
+
+        if (!value) {
+            continue;
+        }
+
+        const cleaned =
+            String(value)
+                .trim();
+
+        if (cleaned) {
+            result.add(cleaned);
+        }
+
+    }
+
+    return [
+        ...result
+    ];
+
+}
+
+function uniqueComments(comments = []) {
+
+    const reviewMap =
+        new Map();
+
+
+    for (const comment of comments) {
+
+        if (!comment) {
+            continue;
+        }
+
+
+        // ==================================================
+        // New object format
+        // ==================================================
+
+        if (
+            typeof comment === "object" &&
+            comment.id
+        ) {
+
+            const id =
+                String(
+                    comment.id
+                ).trim();
+
+
+            const text =
+                String(
+                    comment.text || ""
+                ).trim();
+
+
+            if (!id) {
+                continue;
+            }
+
+
+            reviewMap.set(
+                id,
+                {
+                    id: id,
+                    text: text
+                }
+            );
+
+
+            continue;
+        }
+
+
+        // ==================================================
+        // Backward compatibility with old string comments
+        // ==================================================
+
+        if (
+            typeof comment === "string"
+        ) {
+
+            const text =
+                comment.trim();
+
+
+            if (!text) {
+                continue;
+            }
+
+
+            const fallbackId =
+                "text:" +
+                text;
+
+
+            if (
+                !reviewMap.has(
+                    fallbackId
+                )
+            ) {
+
+                reviewMap.set(
+                    fallbackId,
+                    {
+                        id:
+                            fallbackId,
+
+                        text:
+                            text
+                    }
+                );
+
+            }
+
+        }
+
+    }
+
+
+    return [
+        ...reviewMap.values()
+    ];
+
+}
+function cleanPhone(value) {
+
+    if (!value) {
+        return "";
+    }
+
+    return String(value)
+        .replace(/^phone\s*:\s*/i, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+}
+
+
+function extractPhone(card) {
+
+    if (!card) {
+        return "";
+    }
+
+    // ==================================================
+    // 1. Direct tel link
+    // ==================================================
+
+    const phoneLink =
+        card.querySelector(
+            'a[href^="tel:"]'
+        );
+
+    if (phoneLink) {
+
+        const href =
+            phoneLink.getAttribute("href") || "";
+
+        const phone =
+            cleanPhone(
+                href.replace(
+                    /^tel:/i,
+                    ""
+                )
+            );
+
+        if (phone) {
+            return phone;
+        }
+
+    }
+
+
+    // ==================================================
+    // 2. Google Maps phone data-item-id
+    // ==================================================
+
+    const phoneElements =
+        card.querySelectorAll(
+            '[data-item-id^="phone:"]'
+        );
+
+    for (const element of phoneElements) {
+
+        const aria =
+            element.getAttribute(
+                "aria-label"
+            ) || "";
+
+        const text =
+            element.innerText?.trim() || "";
+
+        const phone =
+            cleanPhone(
+                aria || text
+            );
+
+        if (phone) {
+            return phone;
+        }
+
+    }
+
+
+    // ==================================================
+    // 3. Any phone aria-label
+    // ==================================================
+
+    const phoneAriaElements =
+        card.querySelectorAll(
+            '[aria-label*="Phone" i]'
+        );
+
+    for (const element of phoneAriaElements) {
+
+        const aria =
+            element.getAttribute(
+                "aria-label"
+            ) || "";
+
+        const text =
+            element.innerText?.trim() || "";
+
+        const phone =
+            cleanPhone(
+                aria || text
+            );
+
+        if (phone) {
+            return phone;
+        }
+
+    }
+
+
+    // ==================================================
+    // 4. Card text fallback
+    // ==================================================
+
+    const cardText =
+        card.innerText || "";
+
+    const phonePatterns = [
+
+        /\+\d{1,3}[\s-]?\d{5,14}/,
+
+        /\(\d{2,5}\)[\s-]?\d{3,5}[\s-]?\d{3,5}/,
+
+        /\b\d{10}\b/,
+
+        /\b\d{3,5}[\s-]\d{3,5}[\s-]\d{3,5}\b/
+
+    ];
+
+
+    for (const pattern of phonePatterns) {
+
+        const match =
+            cardText.match(pattern);
+
+        if (match) {
+
+            return match[0].trim();
+
+        }
+
+    }
+
+
+    return "";
+
+}
+
+function extractWebsite(card) {
+
+    if (!card) {
+        return "";
+    }
+
+
+    // ==================================================
+    // 1. Google Maps authority link
+    // ==================================================
+
+    const authorityLink =
+        card.querySelector(
+            'a[data-item-id="authority"]'
+        );
+
+    if (authorityLink) {
+
+        const href =
+            authorityLink.href || "";
+
+        if (
+            isValidBusinessWebsite(href)
+        ) {
+
+            return cleanWebsiteUrl(href);
+
+        }
+
+    }
+
+
+    // ==================================================
+    // 2. Other valid links
+    // ==================================================
+
+    const links =
+        card.querySelectorAll(
+            "a[href]"
+        );
+
+    for (const link of links) {
+
+        const href =
+            link.href || "";
+
+        if (
+            isValidBusinessWebsite(href)
+        ) {
+
+            return cleanWebsiteUrl(href);
+
+        }
+
+    }
+
+
+    return "";
+
+}
+
+function isValidBusinessWebsite(url) {
+
+    if (!url) {
+        return false;
+    }
+
+
+    if (
+        url.startsWith("tel:") ||
+        url.startsWith("mailto:")
+    ) {
+
+        return false;
+
+    }
+
+
+    if (
+        !url.startsWith("http://") &&
+        !url.startsWith("https://")
+    ) {
+
+        return false;
+
+    }
+
+
+    try {
+
+        const parsed =
+            new URL(url);
+
+        const hostname =
+            parsed.hostname.toLowerCase();
+
+
+        const blockedHosts = [
+
+            "google.com",
+            "google.co.in",
+            "googleusercontent.com",
+            "gstatic.com",
+            "googleapis.com"
+
+        ];
+
+
+        if (
+            blockedHosts.some(
+                host =>
+                    hostname === host ||
+                    hostname.endsWith("." + host)
+            )
+        ) {
+
+            return false;
+
+        }
+
+
+        return true;
+
+    } catch (error) {
+
+        return false;
+
+    }
+
+}
+
+function cleanWebsiteUrl(url) {
+
+    try {
+
+        const parsed =
+            new URL(url);
+
+        return parsed.href;
+
+    } catch (error) {
+
+        return url;
+
+    }
+
+}
+
+// ======================================================
+// FUNCTION: Extract visible businesses
+// ======================================================
+
+function extractBusinesses() {
+
+    const businesses = [];
+
+    const results =
+        document.querySelectorAll(
+            'div[role="article"]'
+        );
+
+    console.log(
+        "Business result cards found:",
+        results.length
+    );
+
+
+    results.forEach(
+        (card, index) => {
+
+            console.log(
+                "Processing result:",
+                index + 1
+            );
+
+
+            // ==================================================
+            // NAME
+            // ==================================================
+
+            const nameElement =
+                card.querySelector(
+                    ".qBF1Pd"
+                );
+
+            const name =
+                nameElement
+                    ? nameElement.innerText.trim()
+                    : "";
+
+
+            // ==================================================
+            // CATEGORY + ADDRESS
+            // ==================================================
+
+            let category = "";
+            let address = "";
+
+            const infoElements =
+                card.querySelectorAll(
+                    ".W4Efsd"
+                );
+
+
+            if (
+                infoElements.length >= 2
+            ) {
+
+                const infoText =
+                    infoElements[1]
+                        .innerText
+                        .trim();
+
+
+                const parts =
+                    infoText
+                        .split("·")
+                        .map(
+                            part =>
+                                part.trim()
+                        );
+
+
+                if (
+                    parts.length >= 1
+                ) {
+
+                    category =
+                        parts[0];
+
+                }
+
+
+                if (
+                    parts.length >= 2
+                ) {
+
+                    address =
+                        parts[1];
+
+                }
+
+            }
+
+
+            // ==================================================
+            // RATING + REVIEWS
+            // ==================================================
+
+            let rating = "";
+            let reviews = "";
+
+            const ratingElement =
+                card.querySelector(
+                    '[role="img"][aria-label*="stars"]'
+                );
+
+
+            if (ratingElement) {
+
+                const ratingText =
+                    ratingElement.getAttribute(
+                        "aria-label"
+                    );
+
+
+                if (ratingText) {
+
+                    const ratingMatch =
+                        ratingText.match(
+                            /([\d.]+)\s*stars/i
+                        );
+
+
+                    if (ratingMatch) {
+
+                        rating =
+                            ratingMatch[1];
+
+                    }
+
+
+                    const reviewsMatch =
+                        ratingText.match(
+                            /([\d,]+)\s*Reviews?/i
+                        );
+
+
+                    if (reviewsMatch) {
+
+                        reviews =
+                            reviewsMatch[1]
+                                .replace(
+                                    /,/g,
+                                    ""
+                                );
+
+                    }
+
+                }
+
+            }
+
+
+            // ==================================================
+            // GOOGLE MAPS URL
+            // ==================================================
+
+            const linkElement =
+                card.querySelector(
+                    'a[href*="/maps/place/"]'
+                );
+
+
+            const mapsUrl =
+                linkElement
+                    ? linkElement.href
+                    : "";
+
+            // ==================================================
+            // PHONE NUMBER
+            // ==================================================
+
+            const phone =
+                extractPhone(card);
+
+
+            // ==================================================
+            // WEBSITE
+            // ==================================================
+
+            const website =
+                extractWebsite(card);
+
+            // ==================================================
+            // CREATE BUSINESS OBJECT
+            // ==================================================
+
+            if (name) {
+
+                const business = {
+
+                    name:
+                        name,
+
+                    category:
+                        category,
+
+                    address:
+                        address,
+
+                    phone:
+                        phone,
+
+                    website:
+                        website,
+
+                    rating:
+                        rating,
+
+                    reviews:
+                        reviews,
+
+                    mapsUrl:
+                        mapsUrl,
+
+                    comments: [],
+
+                    photoLinks: [],
+
+                    photosUrl: "",
+
+                    commentsCollected:
+                        false,
+
+                    photosCollected:
+                        false
+
+                };
+
+
+                businesses.push(
+                    business
+                );
+
+
+                console.log(
+                    "Business extracted:",
+                    business
+                );
+
+            }
+
+        }
+    );
+
+
+    console.log(
+        "FINAL EXTRACTED BUSINESSES:",
+        businesses
+    );
+
+
+    return businesses;
+
+}
+
+// ======================================================
+// MAP RESULTS CHANGE WATCHER
+// ======================================================
+
+let watcherInterval = null;
+
+let mutationObserver = null;
+
+let lastBusinessSignature = "";
+
+let lastMapsView = "";
+
+// Timer used only for checking DOM/result changes
+let resultCheckTimeout = null;
+
+// Timer used only for scheduling automatic scanning
+let automaticScanTimeout = null;
+
+// Prevent duplicate automatic scans
+let autoScanRunning = false;
+let automaticScanScheduled = false;
+let detailExtractionRunning = false;
+
+let mapInteractionTimeout = null;
+
+let lastDetectedMapView = "";
+
+let mapInteractionInProgress = false;
+
+let isAutomaticScrolling = false;
+
+// ======================================================
+// FUNCTION: Get visible business signature
+// ======================================================
+
+function getVisibleBusinessSignature() {
+
+    const cards =
+        document.querySelectorAll(
+            'div[role="article"]'
+        );
+
+
+    const identifiers = [];
+
+
+    cards.forEach(
+        (card) => {
+
+            // --------------------------------------------------
+            // Maps URL
+            // --------------------------------------------------
+
+            const link =
+                card.querySelector(
+                    'a[href*="/maps/place/"]'
+                );
+
+
+            if (
+                link &&
+                link.href
+            ) {
+
+                const normalizedUrl =
+                    normalizeMapsUrl(
+                        link.href
+                    );
+
+
+                if (normalizedUrl) {
+
+                    identifiers.push(
+                        normalizedUrl
+                    );
+
+                }
+
+                return;
+
+            }
+
+
+            // --------------------------------------------------
+            // Business name fallback
+            // --------------------------------------------------
+
+            const nameElement =
+                card.querySelector(
+                    ".qBF1Pd"
+                );
+
+
+            if (nameElement) {
+
+                const name =
+                    nameElement.innerText
+                        .trim()
+                        .toLowerCase();
+
+
+                if (name) {
+
+                    identifiers.push(
+                        "name:" + name
+                    );
+
+                }
+
+            }
+
+        }
+    );
+
+
+    const uniqueIdentifiers =
+        [...new Set(identifiers)];
+
+
+    return uniqueIdentifiers
+        .sort()
+        .join("|");
+
+}
+
+
+// ======================================================
+// FUNCTION: Get Google Maps View Information
+// ======================================================
+
+function getMapsView() {
+
+    try {
+
+        const url =
+            new URL(window.location.href);
+
+        const fullUrl =
+            url.href;
+
+        // --------------------------------------------------
+        // Standard Google Maps viewport
+        // Example:
+        // @21.1458,79.0882,13z
+        // --------------------------------------------------
+
+        const standardMatch =
+            fullUrl.match(
+                /@(-?[\d.]+),(-?[\d.]+),([\d.]+)z/
+            );
+
+        if (standardMatch) {
+
+            return [
+                standardMatch[1],
+                standardMatch[2],
+                standardMatch[3]
+            ].join(",");
+
+        }
+
+        // --------------------------------------------------
+        // Fallback to URL
+        // --------------------------------------------------
+
+        return [
+            url.pathname,
+            url.search,
+            url.hash
+        ].join("");
+
+    } catch (error) {
+
+        console.error(
+            "Could not read Google Maps view:",
+            error
+        );
+
+        return window.location.href;
+
+    }
+
+}
+
+// ======================================================
+// FUNCTION: Check business result changes
+// ======================================================
+
+function checkBusinessResults() {
+
+    const currentSignature =
+        getVisibleBusinessSignature();
+
+
+    const currentCount =
+        document.querySelectorAll(
+            'div[role="article"]'
+        ).length;
+
+
+    console.log(
+        "Business check | Visible businesses:",
+        currentCount
+    );
+
+
+    // --------------------------------------------------
+    // First check
+    // --------------------------------------------------
+
+    if (
+        lastBusinessSignature === ""
+    ) {
+
+        lastBusinessSignature =
+            currentSignature;
+
+
+        console.log(
+            "Initial business list recorded."
+        );
+
+
+        return false;
+
+    }
+
+
+    // --------------------------------------------------
+    // Compare
+    // --------------------------------------------------
+
+    if (
+        currentSignature !==
+        lastBusinessSignature
+    ) {
+
+        console.log(
+            "Business result list changed."
+        );
+
+
+        console.log(
+            "OLD BUSINESS SIGNATURE:",
+            lastBusinessSignature
+        );
+
+
+        console.log(
+            "NEW BUSINESS SIGNATURE:",
+            currentSignature
+        );
+
+
+        lastBusinessSignature =
+            currentSignature;
+
+
+        return true;
+
+    }
+
+
+    return false;
+
+}
+
+
+// ======================================================
+// FUNCTION: Check Maps view changes
+// ======================================================
+
+function checkMapsViewChange() {
+
+    const currentView =
+        getMapsView();
+
+
+    // --------------------------------------------------
+    // First check
+    // --------------------------------------------------
+
+    if (
+        lastMapsView === ""
+    ) {
+
+        lastMapsView =
+            currentView;
+
+
+        console.log(
+            "Initial Maps view recorded:",
+            currentView
+        );
+
+
+        return false;
+
+    }
+
+
+    // --------------------------------------------------
+    // Compare map view
+    // --------------------------------------------------
+
+    if (
+        currentView !==
+        lastMapsView
+    ) {
+
+        console.log(
+            "MAP VIEW CHANGED"
+        );
+
+
+        console.log(
+            "OLD VIEW:",
+            lastMapsView
+        );
+
+
+        console.log(
+            "NEW VIEW:",
+            currentView
+        );
+
+
+        lastMapsView =
+            currentView;
+
+
+        return true;
+
+    }
+
+
+    return false;
+
+}
+
+// ======================================================
+// FUNCTION: Perform automatic change check
+// ======================================================
+
+function performChangeCheck(
+    reason = "interval"
+) {
+    
+    if (
+        autoScanRunning ||
+        detailExtractionRunning
+    ) {
+
+        return;
+
+    }
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "AUTOMATIC CHANGE CHECK:",
+        reason
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    // ==================================================
+    // CHECK BUSINESS RESULTS
+    // ==================================================
+
+    const businessesChanged =
+        checkBusinessResults();
+
+
+    // ==================================================
+    // CHECK MAP VIEW
+    // ==================================================
+
+    const mapViewChanged =
+        checkMapsViewChange();
+
+
+    // ==================================================
+    // IF SOMETHING CHANGED
+    // ==================================================
+
+    if (
+        businessesChanged ||
+        mapViewChanged
+    ) {
+
+        let changeReason =
+            reason;
+
+
+        if (
+            mapViewChanged &&
+            businessesChanged
+        ) {
+
+            changeReason =
+                "Map view and business results changed.";
+
+        } else if (
+            mapViewChanged
+        ) {
+
+            changeReason =
+                "Map view changed.";
+
+        } else if (
+            businessesChanged
+        ) {
+
+            changeReason =
+                "Business results changed.";
+
+        }
+
+
+        console.log(
+            "CHANGE DETECTED:",
+            changeReason
+        );
+
+        console.log(
+            "Scheduling automatic collection..."
+        );
+
+
+        // ==================================================
+        // WAIT FOR GOOGLE MAPS TO FINISH LOADING
+        // ==================================================
+
+        scheduleAutomaticScan(
+            changeReason
+        );
+
+    }
+
+}
+
+// ======================================================
+// WAIT FOR GOOGLE MAPS RESULTS TO SETTLE
+// ======================================================
+
+function waitForResultsToSettle(
+    maxWait = 12000,
+    stableTime = 1800
+) {
+
+    return new Promise(
+        (resolve) => {
+
+            const startTime =
+                Date.now();
+
+            let lastSignature =
+                getVisibleBusinessSignature();
+
+            let stableSince =
+                Date.now();
+
+            let lastCount =
+                document.querySelectorAll(
+                    'div[role="article"]'
+                ).length;
+
+
+            console.log(
+                "Waiting for Google Maps results to settle..."
+            );
+
+
+            function check() {
+
+                const currentSignature =
+                    getVisibleBusinessSignature();
+
+                const currentCount =
+                    document.querySelectorAll(
+                        'div[role="article"]'
+                    ).length;
+
+                const now =
+                    Date.now();
+
+
+                // --------------------------------------------------
+                // Results changed
+                // --------------------------------------------------
+
+                if (
+                    currentSignature !==
+                    lastSignature ||
+                    currentCount !==
+                    lastCount
+                ) {
+
+                    console.log(
+                        "Google Maps results are still changing..."
+                    );
+
+                    lastSignature =
+                        currentSignature;
+
+                    lastCount =
+                        currentCount;
+
+                    stableSince =
+                        now;
+
+                }
+
+
+                // --------------------------------------------------
+                // Results stable
+                // --------------------------------------------------
+
+                if (
+                    currentCount > 0 &&
+                    now - stableSince >= stableTime
+                ) {
+
+                    console.log(
+                        "Google Maps results are stable."
+                    );
+
+                    console.log(
+                        "Stable result count:",
+                        currentCount
+                    );
+
+                    resolve();
+
+                    return;
+
+                }
+
+
+                // --------------------------------------------------
+                // Maximum wait
+                // --------------------------------------------------
+
+                if (
+                    now - startTime >= maxWait
+                ) {
+
+                    console.log(
+                        "Maximum result wait reached."
+                    );
+
+                    console.log(
+                        "Scanning currently visible results."
+                    );
+
+                    resolve();
+
+                    return;
+
+                }
+
+
+                setTimeout(
+                    check,
+                    300
+                );
+
+            }
+
+
+            check();
+
+        }
+    );
+
+}
+
+// ======================================================
+// AUTOMATIC SCAN SCHEDULER
+// ======================================================
+
+function scheduleAutomaticScan(reason) {
+
+    console.log(
+        "Automatic scan requested:",
+        reason
+    );
+
+
+    // --------------------------------------------------
+    // If scan is already scheduled
+    // --------------------------------------------------
+
+    if (
+        automaticScanScheduled
+    ) {
+
+        console.log(
+            "Automatic scan already scheduled."
+        );
+
+        return;
+
+    }
+
+
+    automaticScanScheduled =
+        true;
+
+
+    if (
+        automaticScanTimeout
+    ) {
+
+        clearTimeout(
+            automaticScanTimeout
+        );
+
+    }
+
+
+    automaticScanTimeout =
+        setTimeout(
+            async () => {
+
+                try {
+
+                    console.log(
+                        "Waiting for Google Maps to finish loading..."
+                    );
+
+
+                    await waitForResultsToSettle(
+                        12000,
+                        1800
+                    );
+
+
+                    console.log(
+                        "Google Maps results ready."
+                    );
+
+
+                    await autoScanAndSave();
+
+
+                } catch (error) {
+
+                    console.error(
+                        "Automatic scan error:",
+                        error
+                    );
+
+                } finally {
+
+                    automaticScanScheduled =
+                        false;
+
+                    automaticScanTimeout =
+                        null;
+
+                }
+
+            },
+            800
+        );
+
+}
+
+// ======================================================
+// FUNCTION: Schedule change check
+// ======================================================
+
+function scheduleResultCheck(
+    reason
+) {
+      if (
+        autoScanRunning ||
+        detailExtractionRunning ||
+        isAutomaticScrolling
+    ) {
+
+        return;
+
+    }
+
+    // --------------------------------------------------
+    // Cancel only the previous RESULT CHECK timer
+    // --------------------------------------------------
+
+    if (
+        resultCheckTimeout
+    ) {
+
+        clearTimeout(
+            resultCheckTimeout
+        );
+
+    }
+
+
+    // --------------------------------------------------
+    // Wait for Google Maps DOM activity to settle
+    // --------------------------------------------------
+
+    resultCheckTimeout =
+        setTimeout(
+            () => {
+
+                resultCheckTimeout =
+                    null;
+
+                performChangeCheck(
+                    reason
+                );
+
+            },
+            1500
+        );
+
+}
+
+// ======================================================
+// FUNCTION: Handle DOM changes
+// ======================================================
+
+function handleMapsDomChange() {
+
+    if (
+        isAutomaticScrolling ||
+        autoScanRunning ||
+        detailExtractionRunning
+    ) {
+
+        console.log(
+            "Ignoring DOM change during automatic extraction."
+        );
+
+        return;
+
+    }
+
+    console.log(
+        "Google Maps DOM changed."
+    );
+
+    scheduleResultCheck(
+        "DOM change"
+    );
+
+}
+
+// ======================================================
+// GET GOOGLE MAPS RESULTS CONTAINER
+// ======================================================
+
+function getResultsContainer() {
+
+    return (
+        document.querySelector(
+            'div[role="feed"]'
+        ) ||
+        document.body
+    );
+
+}
+
+// ======================================================
+// WATCH GOOGLE MAPS USER INTERACTION
+// ======================================================
+
+function setupMapInteractionWatcher() {
+
+    console.log(
+        "Setting up Google Maps interaction watcher..."
+    );
+
+    document.addEventListener(
+        "mouseup",
+        handlePossibleMapInteraction,
+        true
+    );
+
+    document.addEventListener(
+        "touchend",
+        handlePossibleMapInteraction,
+        true
+    );
+
+    document.addEventListener(
+        "wheel",
+        handlePossibleMapInteraction,
+        true
+    );
+
+}
+
+// ======================================================
+// HANDLE POSSIBLE MAP MOVEMENT / ZOOM
+// ======================================================
+
+function handlePossibleMapInteraction(event) {
+
+    if (
+        autoScanRunning ||
+        detailExtractionRunning ||
+        isAutomaticScrolling
+    ) {
+
+        return;
+
+    }
+    
+    const target =
+        event.target;
+
+    if (!target) {
+        return;
+    }
+
+    // --------------------------------------------------
+    // Ignore extension UI
+    // --------------------------------------------------
+
+    if (
+        target.closest &&
+        target.closest(
+            "input, button, select, textarea"
+        )
+    ) {
+
+        return;
+
+    }
+
+    // --------------------------------------------------
+    // Delay check so Google Maps can update its URL
+    // and result cards
+    // --------------------------------------------------
+
+    if (
+        mapInteractionTimeout
+    ) {
+
+        clearTimeout(
+            mapInteractionTimeout
+        );
+
+    }
+
+    mapInteractionTimeout =
+        setTimeout(
+            () => {
+
+                const currentView =
+                    getMapsView();
+
+                if (
+                    currentView !==
+                    lastDetectedMapView
+                ) {
+
+                    console.log(
+                        "Google Maps interaction detected."
+                    );
+
+                    console.log(
+                        "New map view:",
+                        currentView
+                    );
+
+                    lastDetectedMapView =
+                        currentView;
+
+                    mapInteractionInProgress =
+                        true;
+
+                    scheduleResultCheck(
+                        "Map pan/zoom interaction"
+                    );
+
+                }
+
+            },
+            500
+        );
+
+}
+
+// ======================================================
+// START MAP WATCHER
+// ======================================================
+
+function startMapWatcher() {
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "STARTING MAP RESULTS WATCHER"
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    // --------------------------------------------------
+    // Prevent duplicate watcher
+    // --------------------------------------------------
+
+    if (
+        watcherInterval
+    ) {
+
+        console.log(
+            "Watcher is already running."
+        );
+
+        return;
+
+    }
+
+
+    // --------------------------------------------------
+    // Record initial business state
+    // --------------------------------------------------
+
+    lastBusinessSignature =
+        getVisibleBusinessSignature();
+
+
+    console.log(
+        "Initial visible businesses:"
+    );
+
+
+    console.log(
+        lastBusinessSignature
+    );
+
+
+    // --------------------------------------------------
+    // Record initial map view
+    // --------------------------------------------------
+
+    lastMapsView =
+        getMapsView();
+    
+    lastDetectedMapView =
+        lastMapsView;
+
+    console.log(
+        "Initial Maps view:",
+        lastMapsView
+    );
+
+
+    // --------------------------------------------------
+    // Clear old notification
+    // --------------------------------------------------
+
+    chrome.storage.local.set(
+        {
+            mapResultsChanged:
+                false,
+
+            mapChangeReason:
+                ""
+        }
+    );
+
+
+    // ==================================================
+    // MUTATION OBSERVER
+    // ==================================================
+
+    if (
+        mutationObserver
+    ) {
+
+        mutationObserver.disconnect();
+
+    }
+
+
+    mutationObserver =
+        new MutationObserver(
+            function(
+                mutations
+            ) {
+
+                console.log(
+                    "DOM mutations detected:",
+                    mutations.length
+                );
+
+
+                handleMapsDomChange();
+
+            }
+        );
+
+    const resultsContainer =
+        getResultsContainer();
+
+    mutationObserver.observe(
+        resultsContainer,
+        {
+            childList: true,
+            subtree: true,
+            characterData: true
+        }
+    );
+
+
+    console.log(
+        "DOM MutationObserver started."
+    );
+
+
+    // ==================================================
+    // PERIODIC CHECK
+    // ==================================================
+
+    watcherInterval =
+        setInterval(
+            () => {
+
+                performChangeCheck(
+                    "interval"
+                );
+
+            },
+            1500
+        );
+
+
+    console.log(
+        "Map Results Change Detection started."
+    );
+
+    // ==================================================
+    // INITIAL AUTOMATIC SCAN
+    // ==================================================
+
+    setTimeout(
+        () => {
+
+            console.log(
+                "Starting initial automatic collection..."
+            );
+
+            autoScanAndSave();
+
+        },
+        2500
+    );
+
+    setupMapInteractionWatcher();
+
+}
+
+
+// ======================================================
+// STOP MAP WATCHER
+// ======================================================
+
+function stopMapWatcher() {
+
+    console.log(
+        "Stopping Map Results Change Detection."
+    );
+
+
+    // --------------------------------------------------
+    // Stop interval
+    // --------------------------------------------------
+
+    if (
+        watcherInterval
+    ) {
+
+        clearInterval(
+            watcherInterval
+        );
+
+        watcherInterval =
+            null;
+
+    }
+
+
+    // --------------------------------------------------
+    // Stop observer
+    // --------------------------------------------------
+
+    if (
+        mutationObserver
+    ) {
+
+        mutationObserver.disconnect();
+
+        mutationObserver =
+            null;
+
+    }
+
+
+    // --------------------------------------------------
+    // Clear pending result-check timer
+    // --------------------------------------------------
+
+    if (
+        resultCheckTimeout
+    ) {
+
+        clearTimeout(
+            resultCheckTimeout
+        );
+
+        resultCheckTimeout =
+            null;
+
+    }
+
+
+    // --------------------------------------------------
+    // Clear pending automatic-scan timer
+    // --------------------------------------------------
+
+    if (
+        automaticScanTimeout
+    ) {
+
+        clearTimeout(
+            automaticScanTimeout
+        );
+
+        automaticScanTimeout =
+            null;
+
+    }
+
+
+    lastBusinessSignature =
+        "";
+
+    lastMapsView =
+        "";
+    
+    automaticScanScheduled =
+    false;
+
+    autoScanRunning =
+        false;
+
+    console.log(
+        "Map Results Change Detection stopped."
+    );
+
+    if (mapInteractionTimeout) {
+
+        clearTimeout(
+            mapInteractionTimeout
+        );
+
+        mapInteractionTimeout =
+            null;
+
+    }
+
+    detailExtractionRunning = false;
+    isAutomaticScrolling = false;
+
+}
+
+
+// ======================================================
+// LISTEN FOR POPUP MESSAGES
+// ======================================================
+
+chrome.runtime.onMessage.addListener(
+    function(
+        message,
+        sender,
+        sendResponse
+    ) {
+
+        console.log(
+            "Message received:",
+            message
+        );
+
+
+        // ==================================================
+        // TEST
+        // ==================================================
+
+        if (
+            message.action ===
+            "test"
+        ) {
+
+            sendResponse(
+                {
+                    success:
+                        true,
+
+                    message:
+                        "Content script is working!"
+                }
+            );
+
+            return true;
+
+        }
+
+        if (message.action === "testDetailsPanel") {
+
+            const result =
+                extractDetailsPanel();
+
+            sendResponse({
+                success: true,
+                data: result
+            });
+
+            return true;
+        }
+
+        if (
+            message.action === "testAllBusinessDetails"
+        ) {
+
+            extractAllBusinessDetails()
+                .then(
+                    result => {
+
+                        sendResponse({
+                            success: true,
+                            data: result
+                        });
+
+                    }
+                )
+                .catch(
+                    error => {
+
+                        console.error(
+                            "Full detail test failed:",
+                            error
+                        );
+
+                        sendResponse({
+                            success: false,
+                            error:
+                                error.message
+                        });
+
+                    }
+                );
+
+            return true;
+
+        }
+
+        // ==================================================
+        // UNKNOWN ACTION
+        // ==================================================
+
+        sendResponse(
+            {
+                success:
+                    false,
+
+                message:
+                    "Unknown action."
+            }
+        );
+
+
+        return true;
+
+    }
+);
+
+// ======================================================
+// FUNCTION: Merge old and new businesses
+// Preserve existing data when new data is empty
+// ======================================================
+
+function mergeBusinesses(
+    oldBusinesses,
+    newBusinesses
+) {
+
+    const businessMap =
+        new Map();
+
+
+    // ==================================================
+    // ADD OLD DATA
+    // ==================================================
+
+    oldBusinesses.forEach(
+        (business) => {
+
+            const key =
+                getBusinessKey(
+                    business
+                );
+
+
+            if (key) {
+
+                businessMap.set(
+                    key,
+                    {
+                        ...business
+                    }
+                );
+
+            }
+
+        }
+    );
+
+
+    // ==================================================
+    // ADD / UPDATE NEW DATA
+    // ==================================================
+
+    newBusinesses.forEach(
+        (newBusiness) => {
+
+            const key =
+                getBusinessKey(
+                    newBusiness
+                );
+
+
+            if (!key) {
+                return;
+            }
+
+
+            const oldBusiness =
+                businessMap.get(
+                    key
+                );
+
+
+            // --------------------------------------------------
+            // No previous record
+            // --------------------------------------------------
+
+            if (!oldBusiness) {
+
+                businessMap.set(
+                    key,
+                    {
+                        ...newBusiness
+                    }
+                );
+
+                return;
+
+            }
+
+
+            // --------------------------------------------------
+            // Merge records
+            // Keep old value when new value is empty
+            // --------------------------------------------------
+
+            const mergedBusiness = {
+
+                ...oldBusiness,
+
+                ...newBusiness,
+
+                name:
+                    newBusiness.name ||
+                    oldBusiness.name ||
+                    "",
+
+                category:
+                    newBusiness.category ||
+                    oldBusiness.category ||
+                    "",
+
+                address:
+                    newBusiness.address ||
+                    oldBusiness.address ||
+                    "",
+
+                phone:
+                    newBusiness.phone ||
+                    oldBusiness.phone ||
+                    "",
+
+                website:
+                    newBusiness.website ||
+                    oldBusiness.website ||
+                    "",
+
+                rating:
+                    newBusiness.rating ||
+                    oldBusiness.rating ||
+                    "",
+
+                reviews:
+                    newBusiness.reviews ||
+                    oldBusiness.reviews ||
+                    "",
+
+                mapsUrl:
+                    newBusiness.mapsUrl ||
+                    oldBusiness.mapsUrl ||
+                    "",
+                
+                comments:
+                    uniqueComments([
+                        ...(oldBusiness.comments || []),
+                        ...(newBusiness.comments || [])
+                    ]),
+
+                photoLinks:
+                    uniqueStrings([
+                        ...(oldBusiness.photoLinks || []),
+                        ...(newBusiness.photoLinks || [])
+                    ]),
+
+                photosUrl:
+                    newBusiness.photosUrl ||
+                    oldBusiness.photosUrl ||
+                    "",
+                
+                commentsCollected:
+                    newBusiness.commentsCollected ||
+                    oldBusiness.commentsCollected ||
+                    false,
+
+                photosCollected:
+                    newBusiness.photosCollected ||
+                    oldBusiness.photosCollected ||
+                    false
+
+                    };
+
+
+            businessMap.set(
+                key,
+                mergedBusiness
+            );
+
+        }
+    );
+
+
+    // ==================================================
+    // RETURN FINAL UNIQUE LIST
+    // ==================================================
+
+    return [
+        ...businessMap.values()
+    ];
+
+}
+
+// ======================================================
+// AUTOMATICALLY SAVE BUSINESSES
+// ======================================================
+
+function autoSaveBusinesses(
+    newBusinesses
+) {
+
+    return new Promise(
+        (resolve, reject) => {
+
+            if (
+                !newBusinesses ||
+                newBusinesses.length === 0
+            ) {
+
+                console.log(
+                    "No businesses found to save."
+                );
+
+                resolve();
+
+                return;
+
+            }
+
+
+            chrome.storage.local.get(
+                ["businesses"],
+                (result) => {
+
+                    if (
+                        chrome.runtime.lastError
+                    ) {
+
+                        console.error(
+                            "Storage read error:",
+                            chrome.runtime.lastError.message
+                        );
+
+                        reject(
+                            chrome.runtime.lastError
+                        );
+
+                        return;
+
+                    }
+
+
+                    const oldBusinesses =
+                        result.businesses || [];
+
+
+                    console.log(
+                        "Previously stored businesses:",
+                        oldBusinesses.length
+                    );
+
+                    console.log(
+                        "New businesses:",
+                        newBusinesses.length
+                    );
+
+
+                    const uniqueBusinesses =
+                        mergeBusinesses(
+                            oldBusinesses,
+                            newBusinesses
+                        );
+
+
+                    chrome.storage.local.set(
+                        {
+                            businesses:
+                                uniqueBusinesses
+                        },
+                        () => {
+
+                            if (
+                                chrome.runtime.lastError
+                            ) {
+
+                                console.error(
+                                    "Automatic save error:",
+                                    chrome.runtime.lastError.message
+                                );
+
+                                reject(
+                                    chrome.runtime.lastError
+                                );
+
+                                return;
+
+                            }
+
+
+                            console.log(
+                                "================================="
+                            );
+
+                            console.log(
+                                "AUTOMATIC SAVE COMPLETED"
+                            );
+
+                            console.log(
+                                "New:",
+                                newBusinesses.length
+                            );
+
+                            console.log(
+                                "Total unique:",
+                                uniqueBusinesses.length
+                            );
+
+                            console.log(
+                                "================================="
+                            );
+
+
+                            resolve();
+
+                        }
+                    );
+
+                }
+            );
+
+        }
+    );
+
+}
+
+// ======================================================
+// AUTOMATICALLY SCAN AND SAVE
+// ======================================================
+async function autoScanAndSave() {
+
+    if (autoScanRunning) {
+
+        console.log(
+            "Automatic scan already running."
+        );
+
+        return;
+
+    }
+
+
+    autoScanRunning =
+        true;
+
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "AUTOMATIC SCAN STARTED"
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    try {
+
+        await waitForResultsToSettle(
+            12000,
+            1800
+        );
+
+
+        const businesses =
+            await scanResultsAndEnrich(
+                12,
+                1500
+            );
+
+
+        console.log(
+            "AUTOMATIC SCAN FINAL RESULT:",
+            businesses
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "Automatic scan failed:",
+            error
+        );
+
+    } finally {
+
+        autoScanRunning =
+            false;
+
+
+        // ==================================================
+        // Reset watcher baseline
+        // ==================================================
+
+        lastBusinessSignature =
+            getVisibleBusinessSignature();
+
+
+        lastMapsView =
+            getMapsView();
+
+
+        lastDetectedMapView =
+            lastMapsView;
+
+
+        if (resultCheckTimeout) {
+
+            clearTimeout(
+                resultCheckTimeout
+            );
+
+            resultCheckTimeout =
+                null;
+
+        }
+
+
+        console.log(
+            "Automatic scan finished."
+        );
+
+    }
+
+}
+
+// ======================================================
+// AUTOMATIC START
+// ======================================================
+
+console.log(
+    "Starting Google Maps Business Exporter automatically..."
+);
+
+
+setTimeout(
+    async () => {
+
+        await setTestExtractionConfig();
+
+        startMapWatcher();
+
+    },
+    2000
+);
+
+// ======================================================
+// AUTOMATICALLY SCROLL GOOGLE MAPS RESULTS
+// ======================================================
+
+async function scanResultsAndEnrich(
+    maxScrolls = 12,
+    delay = 1500
+) {
+
+    let collectedBusinesses =
+        await getStoredBusinesses();
+
+
+    const attemptedKeys =
+        new Set();
+
+
+    let noProgressCount = 0;
+
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "RESULT SCAN + DETAIL ENRICHMENT STARTED"
+    );
+
+    console.log(
+        "Already stored:",
+        collectedBusinesses.length
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    isAutomaticScrolling =
+        true;
+
+
+    try {
+
+        for (
+            let i = 0;
+            i < maxScrolls;
+            i++
+        ) {
+
+            console.log(
+                "---------------------------------"
+            );
+
+            console.log(
+                `SCAN BATCH ${i + 1}/${maxScrolls}`
+            );
+
+            console.log(
+                "---------------------------------"
+            );
+
+
+            // ==================================================
+            // Wait for current results
+            // ==================================================
+
+            await waitForResultsToSettle(
+                10000,
+                1000
+            );
+
+
+            // ==================================================
+            // Collect + enrich current visible batch
+            // ==================================================
+
+            collectedBusinesses =
+                await processVisibleBusinessBatch(
+                    collectedBusinesses,
+                    attemptedKeys
+                );
+
+
+            // ==================================================
+            // Get fresh feed after detail navigation
+            // ==================================================
+
+            const feed =
+                document.querySelector(
+                    'div[role="feed"]'
+                );
+
+
+            if (!feed) {
+
+                console.log(
+                    "Result feed disappeared."
+                );
+
+                break;
+
+            }
+
+
+            const beforeHeight =
+                feed.scrollHeight;
+
+
+            const beforeSignature =
+                getVisibleBusinessSignature();
+
+
+            const beforeScrollTop =
+                feed.scrollTop;
+
+
+            // ==================================================
+            // Scroll further
+            // ==================================================
+
+            feed.scrollTo({
+                top:
+                    feed.scrollHeight,
+
+                behavior:
+                    "auto"
+            });
+
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        delay
+                    )
+            );
+
+
+            // ==================================================
+            // Read new state
+            // ==================================================
+
+            const newFeed =
+                document.querySelector(
+                    'div[role="feed"]'
+                );
+
+
+            if (!newFeed) {
+                break;
+            }
+
+
+            const afterHeight =
+                newFeed.scrollHeight;
+
+
+            const afterSignature =
+                getVisibleBusinessSignature();
+
+
+            const afterScrollTop =
+                newFeed.scrollTop;
+
+
+            console.log(
+                "Before height:",
+                beforeHeight
+            );
+
+            console.log(
+                "After height:",
+                afterHeight
+            );
+
+            console.log(
+                "Before scrollTop:",
+                beforeScrollTop
+            );
+
+            console.log(
+                "After scrollTop:",
+                afterScrollTop
+            );
+
+
+            // ==================================================
+            // Detect progress
+            // ==================================================
+
+            const heightChanged =
+                afterHeight >
+                beforeHeight;
+
+
+            const resultsChanged =
+                afterSignature !==
+                beforeSignature;
+
+
+            const scrollChanged =
+                afterScrollTop >
+                beforeScrollTop + 50;
+
+
+            if (
+                !heightChanged &&
+                !resultsChanged &&
+                !scrollChanged
+            ) {
+
+                noProgressCount++;
+
+
+                console.log(
+                    "No new result progress detected:",
+                    noProgressCount
+                );
+
+
+            } else {
+
+                noProgressCount = 0;
+
+            }
+
+
+            if (
+                noProgressCount >= 2
+            ) {
+
+                console.log(
+                    "No more results detected."
+                );
+
+                break;
+
+            }
+
+        }
+
+
+        console.log(
+            "================================="
+        );
+
+        console.log(
+            "RESULT SCAN FINISHED"
+        );
+
+        console.log(
+            "Total collected:",
+            collectedBusinesses.length
+        );
+
+        console.log(
+            "================================="
+        );
+
+
+        return collectedBusinesses;
+
+    } finally {
+
+        isAutomaticScrolling =
+            false;
+
+    }
+
+}
+
+// ======================================================
+// FUNCTION: Extract phone + website from business details
+// ======================================================
+
+function extractDetailsPanel() {
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "DETAILS PANEL EXTRACTION STARTED"
+    );
+
+    console.log(
+        "================================="
+    );
+
+    let phone = "";
+    let website = "";
+
+    // ==================================================
+    // PHONE
+    // ==================================================
+
+    // Method 1: tel link
+    const telLinks =
+        document.querySelectorAll(
+            'a[href^="tel:"]'
+        );
+
+    for (
+        const link of telLinks
+    ) {
+
+        const href =
+            link.getAttribute("href") || "";
+
+        const value =
+            cleanPhone(
+                href.replace(
+                    /^tel:/i,
+                    ""
+                )
+            );
+
+        if (value) {
+
+            phone = value;
+
+            console.log(
+                "Phone found from tel link:",
+                phone
+            );
+
+            break;
+
+        }
+
+    }
+
+    // Method 2: phone data-item-id
+    if (!phone) {
+
+        const phoneElements =
+            document.querySelectorAll(
+                '[data-item-id*="phone" i]'
+            );
+
+        for (
+            const element of phoneElements
+        ) {
+
+            const dataItemId =
+                element.getAttribute(
+                    "data-item-id"
+                ) || "";
+
+            const aria =
+                element.getAttribute(
+                    "aria-label"
+                ) || "";
+
+            const text =
+                element.innerText || "";
+
+            let value =
+                dataItemId
+                    .replace(
+                        /^phone:/i,
+                        ""
+                    )
+                    .trim();
+
+            if (!value) {
+
+                value = aria;
+
+            }
+
+            if (!value) {
+
+                value = text;
+
+            }
+
+            value =
+                cleanPhone(value);
+
+            // Remove "Phone:"
+            value =
+                value.replace(
+                    /^phone\s*:?\s*/i,
+                    ""
+                ).trim();
+
+            if (value) {
+
+                phone = value;
+
+                console.log(
+                    "Phone found:",
+                    phone
+                );
+
+                break;
+
+            }
+
+        }
+
+    }
+
+    // Method 3: aria-label
+    if (!phone) {
+
+        const phoneCandidates =
+            document.querySelectorAll(
+                '[aria-label*="phone" i]'
+            );
+
+        for (
+            const element of phoneCandidates
+        ) {
+
+            const aria =
+                element.getAttribute(
+                    "aria-label"
+                ) || "";
+
+            const text =
+                element.innerText || "";
+
+            const value =
+                cleanPhone(
+                    aria || text
+                )
+                    .replace(
+                        /^phone\s*:?\s*/i,
+                        ""
+                    )
+                    .trim();
+
+            if (value) {
+
+                phone = value;
+
+                console.log(
+                    "Phone found from aria:",
+                    phone
+                );
+
+                break;
+
+            }
+
+        }
+
+    }
+
+    // ==================================================
+    // WEBSITE
+    // ==================================================
+
+    // Method 1: authority link
+    const authorityLinks =
+        document.querySelectorAll(
+            'a[data-item-id*="authority" i]'
+        );
+
+    for (
+        const link of authorityLinks
+    ) {
+
+        const href =
+            link.href || "";
+
+        if (
+            isValidBusinessWebsite(
+                href
+            )
+        ) {
+
+            website =
+                cleanWebsiteUrl(
+                    href
+                );
+
+            console.log(
+                "Website found:",
+                website
+            );
+
+            break;
+
+        }
+
+    }
+
+    // Method 2: links containing website text
+    if (!website) {
+
+        const links =
+            document.querySelectorAll(
+                "a[href]"
+            );
+
+        for (
+            const link of links
+        ) {
+
+            const href =
+                link.href || "";
+
+            const text =
+                (
+                    link.innerText ||
+                    ""
+                ).trim();
+
+            const aria =
+                (
+                    link.getAttribute(
+                        "aria-label"
+                    ) || ""
+                ).trim();
+
+            const combined =
+                `${text} ${aria}`;
+
+            if (
+                /website|web site|official site/i.test(
+                    combined
+                ) &&
+                isValidBusinessWebsite(
+                    href
+                )
+            ) {
+
+                website =
+                    cleanWebsiteUrl(
+                        href
+                    );
+
+                console.log(
+                    "Website found from text:",
+                    website
+                );
+
+                break;
+
+            }
+
+        }
+
+    }
+
+    console.log(
+        "DETAILS PANEL DATA:",
+        {
+            phone,
+            website
+        }
+    );
+
+    return {
+        phone,
+        website
+    };
+
+}
+
+// ======================================================
+// FUNCTION: Extract Google Maps photo gallery URL
+// ======================================================
+
+function extractPhotosUrl() {
+
+    const links =
+        document.querySelectorAll(
+            'a[href]'
+        );
+
+
+    for (
+        const link of links
+    ) {
+
+        const href =
+            link.href || "";
+
+
+        if (
+            href.includes(
+                "google.com/maps"
+            ) &&
+            href.includes(
+                "/photos"
+            )
+        ) {
+
+            console.log(
+                "Google Maps Photos URL found:",
+                href
+            );
+
+
+            return href;
+
+        }
+
+    }
+
+
+    return "";
+
+}
+
+// ======================================================
+// FUNCTION: Extract all business details
+// Phone + Website + Comments + Photo Links
+// ======================================================
+
+async function extractAllBusinessDetails() {
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "FULL BUSINESS DETAILS EXTRACTION STARTED"
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    // ==================================================
+    // STEP 1: PHONE + WEBSITE
+    // ==================================================
+
+    const basicDetails =
+        extractDetailsPanel();
+
+
+    console.log(
+        "Basic details extracted:",
+        basicDetails
+    );
+
+
+    // ==================================================
+    // STEP 2: PHOTO LINKS
+    // ==================================================
+
+    let photoLinks = [];
+    let photosUrl = "";
+    let photosCollected = false;
+
+    let comments = [];
+    let commentsCollected = false;
+
+    try {
+
+        photoLinks =
+            extractVisiblePhotoLinks();
+
+        photosUrl =
+            extractPhotosUrl();
+
+        photosCollected =
+        Boolean(
+            photosUrl ||
+            photoLinks.length > 0
+        );
+
+        console.log(
+            "Photo links found:",
+            photoLinks.length
+        );
+
+        console.log(
+            "Photos URL:",
+            photosUrl
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "Photo extraction failed:",
+            error
+        );
+
+        photosCollected =
+            false;
+
+    }
+
+
+    // ==================================================
+    // STEP 3: REVIEWS
+    // ==================================================
+
+
+    try {
+
+        const reviewsOpened =
+            await openReviewsPanel();
+
+
+        console.log(
+            "Reviews opened:",
+            reviewsOpened
+        );
+
+
+        if (reviewsOpened) {
+
+            comments =
+                await scrollReviewsAndCollect();
+
+            commentsCollected =
+                comments.length > 0;
+
+            console.log(
+                "Comments found:",
+                comments.length
+            );
+
+        } else {
+
+            console.log(
+                "Reviews panel could not be opened."
+            );
+
+            commentsCollected =
+                false;
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            "Review extraction failed:",
+            error
+        );
+        commentsCollected =
+                false;
+
+    }
+
+
+    // ==================================================
+    // FINAL RESULT
+    // ==================================================
+    photosUrl =
+        extractPhotosUrl();
+    
+    const result = {
+
+        phone:
+            basicDetails.phone || "",
+
+        website:
+            basicDetails.website || "",
+
+        comments:
+            comments || [],
+
+        photoLinks:
+            photoLinks || [],
+
+        photosUrl:
+            photosUrl || "",
+
+        commentsCollected:
+            commentsCollected,
+
+        photosCollected:
+            photosCollected
+
+    };
+
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "FULL BUSINESS DETAILS:",
+        result
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    return result;
+
+}
+
+function waitForCondition(
+    condition,
+    timeout = 10000,
+    interval = 300
+) {
+
+    return new Promise(
+        (resolve, reject) => {
+
+            const start =
+                Date.now();
+
+
+            function check() {
+
+                try {
+
+                    const result =
+                        condition();
+
+                    if (result) {
+
+                        resolve(
+                            result
+                        );
+
+                        return;
+
+                    }
+
+                } catch (error) {
+                    // Ignore temporary DOM errors
+                }
+
+
+                if (
+                    Date.now() - start >=
+                    timeout
+                ) {
+
+                    reject(
+                        new Error(
+                            "Condition wait timed out."
+                        )
+                    );
+
+                    return;
+
+                }
+
+
+                setTimeout(
+                    check,
+                    interval
+                );
+
+            }
+
+
+            check();
+
+        }
+    );
+
+}
+function findBusinessCard(
+    mapsUrl
+) {
+
+    if (!mapsUrl) {
+        return null;
+    }
+
+
+    const targetUrl =
+        normalizeMapsUrl(
+            mapsUrl
+        );
+
+
+    const cards =
+        document.querySelectorAll(
+            'div[role="article"]'
+        );
+
+
+    for (const card of cards) {
+
+        const link =
+            card.querySelector(
+                'a[href*="/maps/place/"]'
+            );
+
+
+        if (!link || !link.href) {
+            continue;
+        }
+
+
+        const cardUrl =
+            normalizeMapsUrl(
+                link.href
+            );
+
+
+        if (
+            cardUrl === targetUrl
+        ) {
+
+            return card;
+
+        }
+
+    }
+
+
+    return null;
+
+}
+async function waitForBusinessCard(
+    mapsUrl,
+    timeout = 10000
+) {
+
+    return waitForCondition(
+        () =>
+            findBusinessCard(
+                mapsUrl
+            ),
+        timeout,
+        300
+    );
+
+}
+function isBusinessDetailsView() {
+
+    return window.location.pathname.includes(
+        "/maps/place/"
+    );
+
+}
+
+async function waitForDetailsPanel(
+    business,
+    timeout = 15000
+) {
+
+    console.log(
+        "Waiting for business details page:",
+        business.name
+    );
+
+    return waitForCondition(
+        () => {
+
+            // --------------------------------------------
+            // 1. Must be on a Google Maps place page
+            // --------------------------------------------
+
+            if (
+                !window.location.pathname.includes(
+                    "/maps/place/"
+                )
+            ) {
+
+                return false;
+
+            }
+
+            // --------------------------------------------
+            // 2. Check business name in page
+            // --------------------------------------------
+
+            const expectedName =
+                (business.name || "")
+                    .trim()
+                    .toLowerCase();
+
+            if (expectedName) {
+
+                const pageText =
+                    (
+                        document.body.innerText ||
+                        ""
+                    ).toLowerCase();
+
+                if (
+                    pageText.includes(
+                        expectedName
+                    )
+                ) {
+
+                    console.log(
+                        "Business details page detected:",
+                        business.name
+                    );
+
+                    return true;
+
+                }
+
+            }
+
+            // --------------------------------------------
+            // 3. Check common Google Maps detail elements
+            // --------------------------------------------
+
+            const detailSelectors = [
+                'button[data-item-id^="phone:"]',
+                'a[data-item-id="authority"]',
+                '[data-item-id="address"]',
+                'button[aria-label*="Phone" i]',
+                'button[aria-label*="Website" i]'
+            ];
+
+            for (
+                const selector of detailSelectors
+            ) {
+
+                const element =
+                    document.querySelector(
+                        selector
+                    );
+
+                if (element) {
+
+                    console.log(
+                        "Business detail element detected:",
+                        selector
+                    );
+
+                    return true;
+
+                }
+
+            }
+
+            return false;
+
+        },
+        timeout,
+        300
+    );
+
+}
+
+async function waitForResultsView(
+    timeout = 12000
+) {
+
+    return waitForCondition(
+        () => {
+
+            const feed =
+                document.querySelector(
+                    'div[role="feed"]'
+                );
+
+            const cards =
+                document.querySelector(
+                    'div[role="article"]'
+                );
+
+            return (
+                !isBusinessDetailsView() &&
+                feed &&
+                cards
+            );
+
+        },
+        timeout,
+        300
+    );
+
+}
+async function returnToResults(
+    previousScrollTop = 0
+) {
+
+    console.log(
+        "Returning to Google Maps results..."
+    );
+
+     await closeReviewsPanelIfOpen();
+    
+     // ==================================================
+    // Already on results page?
+    // ==================================================
+
+    if (
+        !isBusinessDetailsView()
+    ) {
+
+        await waitForResultsView(
+            5000
+        );
+
+    } else {
+
+        // ==================================================
+        // Try Google Maps back button
+        // ==================================================
+
+        const backButton =
+            document.querySelector(
+                'button[aria-label*="Back" i]'
+            );
+
+
+        if (backButton) {
+
+            console.log(
+                "Clicking Google Maps back button."
+            );
+
+            backButton.click();
+
+        } else {
+
+            console.log(
+                "Back button not found. Using history.back()."
+            );
+
+            window.history.back();
+
+        }
+
+
+        // ==================================================
+        // Wait until actual result view returns
+        // ==================================================
+
+        await waitForResultsView(
+            12000
+        );
+
+    }
+
+
+    // ==================================================
+    // Restore previous scroll position
+    // ==================================================
+
+    const feed =
+        document.querySelector(
+            'div[role="feed"]'
+        );
+
+
+    if (feed) {
+
+        feed.scrollTo({
+            top:
+                previousScrollTop,
+
+            behavior:
+                "auto"
+        });
+
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    500
+                )
+        );
+
+    }
+
+
+    console.log(
+        "Google Maps results restored."
+    );
+
+}
+
+async function extractDetailsForBusiness(
+    business
+) {
+
+    if (
+        !business ||
+        !business.mapsUrl
+    ) {
+
+        return {
+            phone: "",
+            website: "",
+            comments: [],
+            photoLinks: [],
+            photosUrl: "",
+            commentsCollected: false,
+            photosCollected: false
+            
+        };
+
+    }
+
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "OPENING BUSINESS:",
+        business.name
+    );
+
+    console.log(
+        "MAPS URL:",
+        business.mapsUrl
+    );
+
+    console.log(
+        "================================="
+    );
+
+
+    // ==================================================
+    // Find current business card
+    // ==================================================
+
+    const card =
+        await waitForBusinessCard(
+            business.mapsUrl,
+            10000
+        );
+
+
+    if (!card) {
+
+        throw new Error(
+            "Business card not found: " +
+            business.name
+        );
+
+    }
+
+
+    // ==================================================
+    // Remember current scroll position
+    // ==================================================
+
+    const feed =
+        document.querySelector(
+            'div[role="feed"]'
+        );
+
+
+    const previousScrollTop =
+        feed
+            ? feed.scrollTop
+            : 0;
+
+
+    let details = {
+        phone: "",
+        website: "",
+        comments: [],
+        photoLinks: [],
+        photosUrl: "",
+        commentsCollected: false,
+        photosCollected:false
+
+    };
+
+
+    try {
+
+        // ==================================================
+        // Scroll target card into view
+        // ==================================================
+
+        card.scrollIntoView({
+            behavior: "auto",
+            block: "center"
+        });
+
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    500
+                )
+        );
+
+
+        // ==================================================
+        // Get business link
+        // ==================================================
+
+        const link =
+            card.querySelector(
+                'a[href*="/maps/place/"]'
+            );
+
+
+        if (!link) {
+
+            throw new Error(
+                "Business Maps link not found."
+            );
+
+        }
+
+
+        console.log(
+            "Opening business details..."
+        );
+
+
+        link.click();
+
+
+        // ==================================================
+        // Wait until Google Maps enters details view
+        // ==================================================
+
+        await waitForDetailsPanel(
+            business,
+            15000
+        );
+
+
+        // ==================================================
+        // Wait for panel DOM
+        // ==================================================
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    1200
+                )
+        );
+
+
+        // ==================================================
+        // Extract phone + website
+        // ==================================================
+
+        details =
+            await extractAllBusinessDetails();
+
+
+        console.log(
+            "ALL DETAILS FOUND:",
+            business.name,
+            details
+        );
+
+
+        return details;
+
+    } catch (error) {
+
+        console.error(
+            "Detail extraction error:",
+            business.name,
+            error
+        );
+
+        return details;
+
+    } finally {
+
+        // ==================================================
+        // ALWAYS return to search results
+        // ==================================================
+
+        if (
+            isBusinessDetailsView()
+        ) {
+
+            try {
+
+                await returnToResults(
+                    previousScrollTop
+                );
+
+            } catch (returnError) {
+
+                console.error(
+                    "Failed to return to results:",
+                    returnError
+                );
+
+            }
+
+        }
+
+    }
+
+}
+
+function findBusinessInList(
+    businesses,
+    targetBusiness
+) {
+
+    const targetKey =
+        getBusinessKey(
+            targetBusiness
+        );
+
+
+    if (!targetKey) {
+        return null;
+    }
+
+
+    return (
+        businesses.find(
+            business =>
+                getBusinessKey(
+                    business
+                ) === targetKey
+        ) ||
+        null
+    );
+
+}
+
+function getStoredBusinesses() {
+
+    return new Promise(
+        (resolve, reject) => {
+
+            chrome.storage.local.get(
+                ["businesses"],
+                (result) => {
+
+                    if (
+                        chrome.runtime.lastError
+                    ) {
+
+                        reject(
+                            chrome.runtime.lastError
+                        );
+
+                        return;
+
+                    }
+
+
+                    resolve(
+                        result.businesses || []
+                    );
+
+                }
+            );
+
+        }
+    );
+
+}
+
+async function processVisibleBusinessBatch(
+    collectedBusinesses,
+    attemptedKeys
+) {
+
+    const visibleBusinesses =
+        extractBusinesses();
+
+
+    if (
+        visibleBusinesses.length === 0
+    ) {
+
+        console.log(
+            "No visible businesses found."
+        );
+
+        return collectedBusinesses;
+
+    }
+
+
+    // Remove duplicates inside current batch
+
+    const batch =
+        mergeBusinesses(
+            [],
+            visibleBusinesses
+        );
+
+
+    console.log(
+        "Current visible batch:",
+        batch.length
+    );
+
+
+    for (
+        let i = 0;
+        i < batch.length;
+        i++
+    ) {
+
+        const visibleBusiness =
+            batch[i];
+
+
+        const key =
+            getBusinessKey(
+                visibleBusiness
+            );
+
+
+        if (!key) {
+            continue;
+        }
+
+
+        // ==================================================
+        // Check whether already collected
+        // ==================================================
+
+        const existing =
+            findBusinessInList(
+                collectedBusinesses,
+                visibleBusiness
+            );
+
+
+        let business =
+            existing
+                ? mergeBusinesses(
+                    [existing],
+                    [visibleBusiness]
+                )[0]
+                : {
+                    ...visibleBusiness,
+
+                    comments:
+                        visibleBusiness.comments || [],
+
+                    photoLinks:
+                        visibleBusiness.photoLinks || [],
+
+                    photosUrl:
+                        visibleBusiness.photosUrl || "",
+
+                    commentsCollected:
+                        visibleBusiness.commentsCollected || false,
+
+                    photosCollected:
+                        visibleBusiness.photosCollected || false
+                };
+
+
+        // ==================================================
+        // Already has both values
+        // ==================================================
+
+        if (
+            business.phone &&
+            business.website &&
+            business.commentsCollected &&
+            business.photosCollected
+        ) {
+
+            console.log(
+                "Business already fully processed:",
+                business.name
+            );
+
+            collectedBusinesses =
+                mergeBusinesses(
+                    collectedBusinesses,
+                    [business]
+                );
+
+            continue;
+
+        }
+
+
+        // ==================================================
+        // Don't repeatedly attempt same business
+        // during one scan
+        // ==================================================
+
+        if (
+            attemptedKeys.has(key)
+        ) {
+
+            console.log(
+                "Already attempted:",
+                business.name
+            );
+
+            continue;
+
+        }
+
+
+        attemptedKeys.add(
+            key
+        );
+
+
+        console.log(
+            `Processing ${i + 1}/${batch.length}:`,
+            business.name
+        );
+
+
+        // ==================================================
+        // Open + extract details
+        // ==================================================
+
+        const details =
+            await extractDetailsForBusiness(
+                business
+            );
+
+
+        // ==================================================
+        // Merge extracted values
+        // ==================================================
+
+        business = {
+
+            ...business,
+
+            phone:
+                details.phone ||
+                business.phone ||
+                "",
+
+            website:
+                details.website ||
+                business.website ||
+                "",
+
+            comments:
+                uniqueComments([
+                    ...(business.comments || []),
+                    ...(details.comments || [])
+                ]),
+
+            photoLinks:
+                uniqueStrings([
+                    ...(business.photoLinks || []),
+                    ...(details.photoLinks || [])
+                ]),
+
+             photosUrl:
+                details.photosUrl ||
+                business.photosUrl ||
+                "",
+
+            commentsCollected:
+                details.commentsCollected ||
+                business.commentsCollected ||
+                false,
+
+            photosCollected:
+                details.photosCollected ||
+                business.photosCollected ||
+                false
+
+
+        };
+
+
+        console.log(
+            "Final business:",
+            business
+        );
+
+
+        // ==================================================
+        // Update in-memory collection
+        // ==================================================
+
+        collectedBusinesses =
+            mergeBusinesses(
+                collectedBusinesses,
+                [business]
+            );
+
+
+        // ==================================================
+        // Save immediately
+        // ==================================================
+
+        await autoSaveBusinesses(
+            [business]
+        );
+
+        // ==================================================
+        // SEND TO LARAVEL
+        // ==================================================
+
+        try {
+
+            const laravelResult =
+                await sendBusinessToLaravel({
+
+                    jobId:
+                        extractionConfig.jobId,
+
+                    sourceId:
+                        extractionConfig.sourceId,
+
+                    business:
+                        business,
+
+                    reviews:
+                        business.comments || [],
+
+                    photos:
+                        business.photoLinks || []
+
+                });
+
+
+            console.log(
+                "Laravel import successful:",
+                laravelResult
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Laravel import failed:",
+                business.name,
+                error
+            );
+
+        }
+
+
+        // ==================================================
+        // Small delay
+        // ==================================================
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    500
+                )
+        );
+
+    }
+
+
+    return collectedBusinesses;
+
+}
+
+
+function isVisibleElement(element) {
+
+    if (!element) {
+        return false;
+    }
+
+
+    const style =
+        window.getComputedStyle(
+            element
+        );
+
+
+    if (
+        style.display === "none" ||
+        style.visibility === "hidden"
+    ) {
+
+        return false;
+
+    }
+
+
+    const rect =
+        element.getBoundingClientRect();
+
+
+    return (
+        rect.width > 0 &&
+        rect.height > 0
+    );
+
+}
+
+
+function findReviewsButton() {
+
+    const candidates = [];
+
+
+    const elements =
+        document.querySelectorAll(
+            'button, [role="button"]'
+        );
+
+
+    for (const element of elements) {
+
+        if (
+            !isVisibleElement(
+                element
+            )
+        ) {
+
+            continue;
+
+        }
+
+
+        const text =
+            (
+                element.innerText ||
+                ""
+            )
+                .replace(/\s+/g, " ")
+                .trim();
+
+
+        const aria =
+            (
+                element.getAttribute(
+                    "aria-label"
+                ) || ""
+            )
+                .replace(/\s+/g, " ")
+                .trim();
+
+
+        const combined =
+            `${text} ${aria}`.trim();
+
+
+        if (
+            !/reviews?/i.test(
+                combined
+            )
+        ) {
+
+            continue;
+
+        }
+
+
+        // ----------------------------------------------
+        // Strong candidate:
+        // "Reviews"
+        // "123 Reviews"
+        // "1,234 Reviews"
+        // ----------------------------------------------
+
+        const exactReviewLabel =
+            /^(?:[\d,.KkMm]+\s*)?reviews?$/i;
+
+
+        let score = 0;
+
+
+        if (
+            exactReviewLabel.test(
+                text
+            )
+        ) {
+
+            score += 100;
+
+        }
+
+
+        if (
+            exactReviewLabel.test(
+                aria
+            )
+        ) {
+
+            score += 80;
+
+        }
+
+
+        if (
+            /\breviews?\b/i.test(
+                text
+            )
+        ) {
+
+            score += 30;
+
+        }
+
+
+        if (
+            /\breviews?\b/i.test(
+                aria
+            )
+        ) {
+
+            score += 20;
+
+        }
+
+
+        candidates.push({
+            element,
+            text,
+            aria,
+            score
+        });
+
+    }
+
+
+    candidates.sort(
+        (a, b) =>
+            b.score -
+            a.score
+    );
+
+
+    console.log(
+        "Review button candidates:",
+        candidates.map(
+            candidate => ({
+                text:
+                    candidate.text,
+
+                aria:
+                    candidate.aria,
+
+                score:
+                    candidate.score
+            })
+        )
+    );
+
+
+    if (
+        candidates.length === 0
+    ) {
+
+        console.log(
+            "No visible Reviews button found."
+        );
+
+        return null;
+
+    }
+
+
+    const selected =
+        candidates[0];
+
+
+    console.log(
+        "Selected Reviews button:",
+        selected
+    );
+
+
+    return selected.element;
+
+}
+
+async function openReviewsPanel() {
+
+    const reviewsButton =
+        findReviewsButton();
+
+
+    if (!reviewsButton) {
+
+        console.log(
+            "Reviews button not found."
+        );
+
+        return false;
+
+    }
+
+
+    console.log(
+        "Clicking Reviews button..."
+    );
+
+
+    reviewsButton.scrollIntoView({
+        behavior: "auto",
+        block: "center"
+    });
+
+
+    await new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                300
+            )
+    );
+
+
+    reviewsButton.click();
+
+
+    try {
+
+        await waitForCondition(
+            () => {
+
+                return (
+                    document.querySelector(
+                        '[data-review-id]'
+                    ) ||
+                    document.querySelector(
+                        '.wiI7pd'
+                    )
+                );
+
+            },
+            10000,
+            300
+        );
+
+
+        console.log(
+            "Reviews panel loaded."
+        );
+
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    800
+                )
+        );
+
+
+        return true;
+
+    } catch (error) {
+
+        console.error(
+            "Reviews panel did not load:",
+            error
+        );
+
+
+        return false;
+
+    }
+
+}
+
+function expandReviewTexts() {
+
+    const reviewContainers =
+        document.querySelectorAll(
+            '[data-review-id]'
+        );
+
+    let expanded = 0;
+
+    reviewContainers.forEach(
+        review => {
+
+            const buttons =
+                review.querySelectorAll(
+                    'button'
+                );
+
+            buttons.forEach(
+                button => {
+
+                    const text =
+                        (
+                            button.innerText ||
+                            button.getAttribute(
+                                "aria-label"
+                            ) ||
+                            ""
+                        )
+                            .trim();
+
+                    if (
+                        /^more$/i.test(text)
+                    ) {
+
+                        button.click();
+
+                        expanded++;
+
+                    }
+
+                }
+            );
+
+        }
+    );
+
+    console.log(
+        "Review texts expanded:",
+        expanded
+    );
+
+}
+
+function extractVisibleComments() {
+
+    const comments = [];
+
+    const reviewContainers =
+        document.querySelectorAll(
+            "[data-review-id]"
+        );
+
+
+    reviewContainers.forEach(
+        (review) => {
+
+            // ==================================================
+            // REVIEW ID
+            // ==================================================
+
+            const reviewId =
+                review.getAttribute(
+                    "data-review-id"
+                );
+
+
+            if (!reviewId) {
+
+                console.warn(
+                    "Review without data-review-id found."
+                );
+
+                return;
+
+            }
+
+
+            // ==================================================
+            // REVIEW TEXT
+            // ==================================================
+
+            let textElement =
+                review.querySelector(
+                    ".wiI7pd"
+                );
+
+
+            if (!textElement) {
+
+                textElement =
+                    review.querySelector(
+                        '[data-expandable-section]'
+                    );
+
+            }
+
+
+            if (!textElement) {
+
+                textElement =
+                    review.querySelector(
+                        '[class*="review"]'
+                    );
+
+            }
+
+
+            if (!textElement) {
+                return;
+            }
+
+
+            const text =
+                textElement.innerText
+                    ?.trim() || "";
+
+
+            if (!text) {
+                return;
+            }
+
+
+            // ==================================================
+            // CREATE REVIEW OBJECT
+            // ==================================================
+
+            comments.push(
+                {
+                    id:
+                        reviewId,
+
+                    text:
+                        text
+                }
+            );
+
+        }
+    );
+
+
+    return uniqueComments(
+        comments
+    );
+
+}
+
+function isScrollableElement(element) {
+
+    if (!element) {
+        return false;
+    }
+
+    const style =
+        window.getComputedStyle(
+            element
+        );
+
+    const overflowY =
+        style.overflowY;
+
+    const hasVerticalOverflow =
+        element.scrollHeight >
+        element.clientHeight + 20;
+
+    const allowsScrolling =
+        overflowY === "auto" ||
+        overflowY === "scroll";
+
+    return (
+        hasVerticalOverflow &&
+        allowsScrolling
+    );
+}
+
+
+function findReviewScrollContainer() {
+
+    const firstReview =
+        document.querySelector(
+            '[data-review-id]'
+        );
+
+    if (!firstReview) {
+
+        console.log(
+            "No review element found."
+        );
+
+        return null;
+    }
+
+
+    let current =
+        firstReview.parentElement;
+
+
+    while (
+        current &&
+        current !== document.body
+    ) {
+
+        if (
+            isScrollableElement(
+                current
+            )
+        ) {
+
+            const reviewCount =
+                current.querySelectorAll(
+                    '[data-review-id]'
+                ).length;
+
+
+            if (
+                reviewCount > 0
+            ) {
+
+                console.log(
+                    "Review scroll container found:",
+                    current
+                );
+
+                console.log(
+                    "Reviews currently inside:",
+                    reviewCount
+                );
+
+                return current;
+            }
+
+        }
+
+
+        current =
+            current.parentElement;
+
+    }
+
+
+    console.log(
+        "Could not identify a dedicated review scroll container."
+    );
+
+    return null;
+}
+
+async function scrollReviewsAndCollect() {
+
+    const container =
+        findReviewScrollContainer();
+
+
+    if (!container) {
+
+        console.log(
+            "Review scroll container not found."
+        );
+
+        return extractVisibleComments();
+
+    }
+
+
+    const allComments = new Map();
+
+
+    let previousCommentCount = 0;
+    let stableRounds = 0;
+
+
+    for (
+        let i = 0;
+        i < 50;
+        i++
+    ) {
+
+        // ==================================================
+        // Expand currently visible reviews
+        // ==================================================
+
+        expandReviewTexts();
+
+
+        // ==================================================
+        // Extract currently visible comments
+        // ==================================================
+
+        const visibleComments =
+            extractVisibleComments();
+
+
+        visibleComments.forEach(comment => {
+
+            if (comment && comment.id) {
+
+                allComments.set(
+                    comment.id,
+                    comment
+                );
+
+            }
+
+        });
+
+
+        console.log(
+            "Review batch:",
+            i + 1,
+            "Comments collected:",
+            allComments.size
+        );
+
+
+        // ==================================================
+        // Check current scroll position
+        // ==================================================
+
+        const beforeScrollTop =
+            container.scrollTop;
+
+        const maxScrollTop =
+            container.scrollHeight -
+            container.clientHeight;
+
+
+        // ==================================================
+        // Already at bottom
+        // ==================================================
+
+        if (
+            beforeScrollTop >=
+            maxScrollTop - 10
+        ) {
+
+            console.log(
+                "Review container reached bottom."
+            );
+
+            break;
+
+        }
+
+
+        // ==================================================
+        // Scroll incrementally
+        // ==================================================
+
+        const scrollAmount =
+            Math.max(
+                500,
+                container.clientHeight * 0.8
+            );
+
+
+        container.scrollTop =
+            Math.min(
+                beforeScrollTop +
+                scrollAmount,
+                maxScrollTop
+            );
+
+
+        // ==================================================
+        // Wait for lazy-loaded reviews
+        // ==================================================
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    1200
+                )
+        );
+
+
+        // ==================================================
+        // Check whether new comments appeared
+        // ==================================================
+
+        if (
+            allComments.size ===
+            previousCommentCount
+        ) {
+
+            stableRounds++;
+
+        } else {
+
+            stableRounds =
+                0;
+
+        }
+
+
+        previousCommentCount =
+            allComments.size;
+
+
+        // ==================================================
+        // Stop after several rounds without progress
+        // ==================================================
+
+        if (
+            stableRounds >= 3
+        ) {
+
+            console.log(
+                "No additional review content detected."
+            );
+
+            break;
+
+        }
+
+    }
+
+
+    return [
+        ...allComments.values()
+    ];
+}
+
+async function closeReviewsPanelIfOpen() {
+
+    const reviewElements =
+        document.querySelectorAll(
+            "[data-review-id]"
+        );
+
+    if (
+        reviewElements.length === 0
+    ) {
+
+        return false;
+
+    }
+
+
+    console.log(
+        "Reviews panel appears to be open."
+    );
+
+
+    const backButton =
+        document.querySelector(
+            'button[aria-label*="Back" i]'
+        );
+
+
+    if (!backButton) {
+
+        console.warn(
+            "Review panel back button not found."
+        );
+
+        return false;
+
+    }
+
+
+    backButton.click();
+
+
+    try {
+
+        await waitForCondition(
+            () => {
+
+                return (
+                    document.querySelectorAll(
+                        "[data-review-id]"
+                    ).length === 0
+                );
+
+            },
+            5000,
+            300
+        );
+
+        console.log(
+            "Reviews panel closed."
+        );
+
+        return true;
+
+    } catch (error) {
+
+        console.warn(
+            "Could not confirm review panel closure."
+        );
+
+        return false;
+
+    }
+
+}
+
+// ======================================================
+// FUNCTION: Extract visible photo/image URLs
+// ======================================================
+
+function extractVisiblePhotoLinks() {
+
+    const links =
+        new Set();
+
+
+    // ==================================================
+    // 1. Google Maps photo page links
+    // ==================================================
+
+    const anchors =
+        document.querySelectorAll(
+            'a[href]'
+        );
+
+
+    anchors.forEach(
+        anchor => {
+
+            const href =
+                anchor.href || "";
+
+            const aria =
+                anchor.getAttribute(
+                    "aria-label"
+                ) || "";
+
+            const text =
+                anchor.innerText?.trim() || "";
+
+
+            if (
+                href.includes(
+                    "/photos"
+                ) ||
+                /photo/i.test(
+                    aria
+                ) ||
+                /photo/i.test(
+                    text
+                )
+            ) {
+
+                if (
+                    href.startsWith(
+                        "http"
+                    )
+                ) {
+
+                    links.add(
+                        href
+                    );
+
+                }
+
+            }
+
+        }
+    );
+
+
+    // ==================================================
+    // 2. Actual image URLs
+    // ==================================================
+
+    const images =
+        document.querySelectorAll(
+            "img"
+        );
+
+
+    images.forEach(
+        image => {
+
+            // currentSrc is preferable because
+            // Google may use responsive images
+
+            const imageUrl =
+                image.currentSrc ||
+                image.src ||
+                "";
+
+
+            if (!imageUrl) {
+                return;
+            }
+
+
+            // ------------------------------------------
+            // Ignore extension / UI images
+            // ------------------------------------------
+
+            if (
+                imageUrl.startsWith(
+                    "data:"
+                )
+            ) {
+
+                return;
+
+            }
+
+
+            // ------------------------------------------
+            // Google-hosted image URLs
+            // ------------------------------------------
+
+            if (
+                imageUrl.includes(
+                    "googleusercontent.com"
+                ) ||
+                imageUrl.includes(
+                    "ggpht.com"
+                )
+            ) {
+
+                links.add(
+                    imageUrl
+                );
+
+            }
+
+        }
+    );
+
+
+    // ==================================================
+    // 3. Images inside photo links
+    // ==================================================
+
+    images.forEach(
+        image => {
+
+            const parentLink =
+                image.closest(
+                    'a[href]'
+                );
+
+
+            if (
+                !parentLink
+            ) {
+
+                return;
+
+            }
+
+
+            const href =
+                parentLink.href || "";
+
+
+            if (
+                href.includes(
+                    "/photos"
+                )
+            ) {
+
+                const imageUrl =
+                    image.currentSrc ||
+                    image.src ||
+                    "";
+
+
+                if (
+                    imageUrl
+                ) {
+
+                    links.add(
+                        imageUrl
+                    );
+
+                }
+
+            }
+
+        }
+    );
+
+
+    const result =
+        [
+            ...links
+        ];
+
+
+    console.log(
+        "Actual photo/image URLs found:",
+        result.length
+    );
+
+
+    console.log(
+        "Photo URLs:",
+        result
+    );
+
+
+    return result;
+
+}

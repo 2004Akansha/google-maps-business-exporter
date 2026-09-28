@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <title>Maps Business Exporter</title>
+
+    <link rel="stylesheet" href="popup.css">
+
+</head>
+
+<body>
+
+    
+    <!-- ======================================================
+        HEADER
+    ====================================================== -->
+
+    <div class="header">
+
+        <h2>Maps Business Exporter</h2>
+
+        <button
+            id="closePopup"
+            class="close-button"
+            title="Close"
+            aria-label="Close"
+        >
+            &times;
+        </button>
+
+    </div>
+
+
+    <!-- ======================================================
+        AUTOMATIC SEARCH
+    ====================================================== -->
+
+    <h3>Automatic Search</h3>
+
+    <label for="businessType">
+        Business Type:
+    </label>
+
+    <select id="businessType">
+
+        <option value="restaurants">
+            Restaurants
+        </option>
+
+        <option value="cafes">
+            Cafes
+        </option>
+
+        <option value="hotels">
+            Hotels
+        </option>
+
+        <option value="hospitals">
+            Hospitals
+        </option>
+
+        <option value="schools">
+            Schools
+        </option>
+
+        <option value="colleges">
+            Colleges
+        </option>
+
+        <option value="gyms">
+            Gyms
+        </option>
+
+        <option value="salons">
+            Salons
+        </option>
+
+        <option value="pharmacies">
+            Pharmacies
+        </option>
+
+        <option value="IT companies">
+            IT Companies
+        </option>
+
+    </select>
+
+
+    <label for="city">
+        City:
+    </label>
+
+    <input
+        type="text"
+        id="city"
+        placeholder="Enter city"
+        value="Nagpur"
+    >
+
+
+    <button id="startSearch">
+        Start Automatic Search
+    </button>
+
+
+        <p id="searchStatus"></p>
+
+
+    <!-- ======================================================
+        LARAVEL EXTRACTION
+    ====================================================== -->
+
+    <div class="config-section">
+
+        <h3>Laravel Extraction</h3>
+
+        <label for="jobId">
+            Job ID:
+        </label>
+
+        <input
+            type="number"
+            id="jobId"
+            placeholder="Example: 1"
+            min="1"
+        >
+
+
+        <label for="sourceId">
+            Source ID:
+        </label>
+
+        <input
+            type="number"
+            id="sourceId"
+            placeholder="Example: 1"
+            min="1"
+        >
+
+
+        <button id="saveConfig">
+            Save Configuration
+        </button>
+
+
+        <p id="configStatus"></p>
+
+        <button id="testLaravel">
+            Test Laravel Connection
+        >
+
+        <p id="laravelTestStatus"></p>
+
+    </div>
+
+
+    <!-- ======================================================
+        BUSINESS DATA
+    ====================================================== -->
+
+    <p id="count">
+        Businesses collected: 0
+    </p>
+
+    <p id="autoStatus">
+        Automatic collection is active on Google Maps.
+    </p>
+
+    <button id="export">
+        Export CSV
+    </button>
+
+    <button id="clear">
+        Clear Data
+    </button>
+
+
+    <!-- ======================================================
+        STATUS
+    ====================================================== -->
+
+    <p id="status"></p>
+
+    <p id="progress"></p>
+
+
+    <!-- ======================================================
+        JAVASCRIPT
+    ====================================================== -->
+
+    <script src="csv.js"></script>
+    <script src="popup.js"></script>
+
+</body>
+
+</html>
