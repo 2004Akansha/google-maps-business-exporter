@@ -16,92 +16,6 @@ let extractionConfig = {
 };
 
 // ======================================================
-// LOAD LARAVEL EXTRACTION CONFIGURATION
-// ======================================================
-
-async function loadExtractionConfig() {
-
-    return new Promise((resolve) => {
-
-        chrome.storage.local.get(
-            [
-                "extractionConfig"
-            ],
-            (result) => {
-
-                if (
-                    chrome.runtime.lastError
-                ) {
-
-                    console.error(
-                        "Could not load extraction config:",
-                        chrome.runtime.lastError
-                    );
-
-                    resolve(false);
-
-                    return;
-                }
-
-
-                if (
-                    result.extractionConfig
-                ) {
-
-                    extractionConfig =
-                        result.extractionConfig;
-
-                    console.log(
-                        "Laravel extraction config loaded:",
-                        extractionConfig
-                    );
-
-                    resolve(true);
-
-                    return;
-                }
-
-
-                console.warn(
-                    "No Laravel extraction configuration found."
-                );
-
-                resolve(false);
-
-            }
-        );
-
-    });
-
-}
-
-async function setTestExtractionConfig() {
-
-    extractionConfig = {
-        jobId: 1,
-        sourceId: 1
-    };
-
-    await new Promise((resolve) => {
-
-        chrome.storage.local.set(
-            {
-                extractionConfig:
-                    extractionConfig
-            },
-            resolve
-        );
-
-    });
-
-    console.log(
-        "TEST Laravel configuration:",
-        extractionConfig
-    );
-
-}
-
-// ======================================================
 // FUNCTION: Normalize Maps URL
 // ======================================================
 
@@ -348,6 +262,51 @@ function cleanPhone(value) {
 
 }
 
+function cleanGoogleMapsAddress(value) {
+
+    if (!value) {
+        return "";
+    }
+
+    let address = String(value)
+        .replace(/\s+/g, " ")
+        .trim();
+
+    // Remove "Address:" prefix if Google provides it
+    address = address.replace(
+        /^address\s*:\s*/i,
+        ""
+    );
+
+    // Remove Google Maps business status
+    //
+    // Examples:
+    // Open, Closes 7 pm
+    // Open, Closes 11:30 pm
+    // Closed, Opens Monday at 9 am
+    // Open · Closes 7 pm
+    // Closed · Opens Monday at 9 am
+
+    address = address
+        .replace(
+            /\s*(?:,|·)\s*Open\s*(?:,|·)\s*Closes.*$/i,
+            ""
+        )
+        .replace(
+            /\s*(?:,|·)\s*Closed\s*(?:,|·)\s*Opens.*$/i,
+            ""
+        )
+        .replace(
+            /\s*(?:,|·)\s*Open\s*$/i,
+            ""
+        )
+        .replace(
+            /\s*(?:,|·)\s*Closed\s*$/i,
+            ""
+        );
+
+    return address.trim();
+}
 
 function extractPhone(card) {
 
@@ -632,6 +591,7 @@ function cleanWebsiteUrl(url) {
 
 }
 
+
 // ======================================================
 // FUNCTION: Extract visible businesses
 // ======================================================
@@ -701,15 +661,22 @@ function extractBusinesses() {
                 const parts =
                     infoText
                         .split("·")
-                        .map(
-                            part =>
-                                part.trim()
-                        );
+                        .map(part => part.trim())
+                        .filter(Boolean);
+
+                console.log(
+                    "RAW INFO TEXT:",
+                    infoText
+                );
+
+                console.log(
+                    "ADDRESS PARTS:",
+                    parts
+                );
 
 
-                if (
-                    parts.length >= 1
-                ) {
+                // First part is the category
+                if (parts.length >= 1) {
 
                     category =
                         parts[0];
@@ -717,12 +684,25 @@ function extractBusinesses() {
                 }
 
 
-                if (
-                    parts.length >= 2
-                ) {
+                // Everything after the category
+                // is treated as part of the address.
+                if (parts.length >= 2) {
 
                     address =
-                        parts[1];
+                        parts
+                            .slice(1)
+                            .join(", ");
+
+                    address =
+                        cleanGoogleMapsAddress(
+                            address
+                        );
+
+                     console.log(
+                        "FINAL CLEAN ADDRESS:",
+                        address
+                    );
+
 
                 }
 
@@ -833,7 +813,7 @@ function extractBusinesses() {
                         category,
 
                     address:
-                        address,
+                        cleanGoogleMapsAddress(address),
 
                     phone:
                         phone,
@@ -2616,7 +2596,44 @@ console.log(
 setTimeout(
     async () => {
 
-        await setTestExtractionConfig();
+        try {
+
+            const result =
+                await chrome.storage.local.get(
+                    ["extractionConfig"]
+                );
+
+            if (
+                !result.extractionConfig ||
+                !result.extractionConfig.jobId ||
+                !result.extractionConfig.sourceId
+            ) {
+
+                console.warn(
+                    "Laravel extraction configuration is missing."
+                );
+
+                console.warn(
+                    "Please open the extension popup and save Job ID and Source ID."
+                );
+
+            } else {
+
+                console.log(
+                    "Laravel extraction configuration loaded:",
+                    result.extractionConfig
+                );
+
+            }
+
+        } catch (error) {
+
+            console.error(
+                "Failed to load extraction configuration:",
+                error
+            );
+
+        }
 
         startMapWatcher();
 
@@ -2624,6 +2641,65 @@ setTimeout(
     2000
 );
 
+async function waitForBusinessCards(
+    minCards = 5,
+    timeout = 15000
+) {
+
+    console.log(
+        "Waiting for Google Maps business cards..."
+    );
+
+    const startTime = Date.now();
+
+    while (
+        Date.now() - startTime < timeout
+    ) {
+
+        const count =
+            document.querySelectorAll(
+                'div[role="article"]'
+            ).length;
+
+        console.log(
+            "Current business card count:",
+            count
+        );
+
+        if (count >= minCards) {
+
+            console.log(
+                "Enough business cards loaded:",
+                count
+            );
+
+            return true;
+
+        }
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    500
+                )
+        );
+
+    }
+
+    const finalCount =
+        document.querySelectorAll(
+            'div[role="article"]'
+        ).length;
+
+    console.log(
+        "Business card wait finished.",
+        "Final count:",
+        finalCount
+    );
+
+    return finalCount > 0;
+}
 // ======================================================
 // AUTOMATICALLY SCROLL GOOGLE MAPS RESULTS
 // ======================================================
@@ -2636,13 +2712,10 @@ async function scanResultsAndEnrich(
     let collectedBusinesses =
         await getStoredBusinesses();
 
-
     const attemptedKeys =
         new Set();
 
-
     let noProgressCount = 0;
-
 
     console.log(
         "================================="
@@ -2661,12 +2734,28 @@ async function scanResultsAndEnrich(
         "================================="
     );
 
-
-    isAutomaticScrolling =
-        true;
-
+    isAutomaticScrolling = true;
 
     try {
+
+        // ==================================================
+        // INITIAL WAIT
+        // ==================================================
+
+        await waitForResultsToSettle(
+            12000,
+            1500
+        );
+
+        await waitForBusinessCards(
+            3,
+            10000
+        );
+
+
+        // ==================================================
+        // MAIN SCROLL LOOP
+        // ==================================================
 
         for (
             let i = 0;
@@ -2688,28 +2777,72 @@ async function scanResultsAndEnrich(
 
 
             // ==================================================
-            // Wait for current results
+            // Wait for Google Maps results
             // ==================================================
 
             await waitForResultsToSettle(
                 10000,
-                1000
+                1200
             );
 
 
             // ==================================================
-            // Collect + enrich current visible batch
+            // Make sure cards exist
             // ==================================================
 
-            collectedBusinesses =
-                await processVisibleBusinessBatch(
-                    collectedBusinesses,
-                    attemptedKeys
+            await waitForBusinessCards(
+                1,
+                8000
+            );
+
+
+            // ==================================================
+            // Extract CURRENT visible businesses
+            // ==================================================
+
+            const currentVisible =
+                extractBusinesses();
+
+            console.log(
+                "Current visible businesses:",
+                currentVisible.length
+            );
+
+
+            console.log(
+                "Current visible names:",
+                currentVisible.map(
+                    business =>
+                        business.name
+                )
+            );
+
+
+            // ==================================================
+            // Process current batch
+            // ==================================================
+
+            if (
+                currentVisible.length > 0
+            ) {
+
+                collectedBusinesses =
+                    await processVisibleBusinessBatch(
+                        collectedBusinesses,
+                        attemptedKeys
+                    );
+
+            } else {
+
+                console.warn(
+                    "No businesses found in current batch."
                 );
 
+            }
+
 
             // ==================================================
-            // Get fresh feed after detail navigation
+            // Get fresh feed
             // ==================================================
 
             const feed =
@@ -2720,8 +2853,8 @@ async function scanResultsAndEnrich(
 
             if (!feed) {
 
-                console.log(
-                    "Result feed disappeared."
+                console.warn(
+                    "Google Maps feed not found."
                 );
 
                 break;
@@ -2729,20 +2862,37 @@ async function scanResultsAndEnrich(
             }
 
 
+            // ==================================================
+            // Capture current state
+            // ==================================================
+
             const beforeHeight =
                 feed.scrollHeight;
 
+            const beforeScrollTop =
+                feed.scrollTop;
 
             const beforeSignature =
                 getVisibleBusinessSignature();
 
 
-            const beforeScrollTop =
-                feed.scrollTop;
+            console.log(
+                "Before scroll:",
+                {
+                    height:
+                        beforeHeight,
+
+                    scrollTop:
+                        beforeScrollTop,
+
+                    businesses:
+                        currentVisible.length
+                }
+            );
 
 
             // ==================================================
-            // Scroll further
+            // Scroll DOWN
             // ==================================================
 
             feed.scrollTo({
@@ -2754,6 +2904,10 @@ async function scanResultsAndEnrich(
             });
 
 
+            // ==================================================
+            // Wait for Google Maps
+            // ==================================================
+
             await new Promise(
                 resolve =>
                     setTimeout(
@@ -2763,8 +2917,14 @@ async function scanResultsAndEnrich(
             );
 
 
+            await waitForResultsToSettle(
+                10000,
+                1000
+            );
+
+
             // ==================================================
-            // Read new state
+            // Get NEW feed
             // ==================================================
 
             const newFeed =
@@ -2774,40 +2934,39 @@ async function scanResultsAndEnrich(
 
 
             if (!newFeed) {
+
+                console.warn(
+                    "Feed disappeared after scrolling."
+                );
+
                 break;
+
             }
 
 
             const afterHeight =
                 newFeed.scrollHeight;
 
+            const afterScrollTop =
+                newFeed.scrollTop;
 
             const afterSignature =
                 getVisibleBusinessSignature();
 
 
-            const afterScrollTop =
-                newFeed.scrollTop;
-
-
             console.log(
-                "Before height:",
-                beforeHeight
-            );
+                "After scroll:",
+                {
+                    height:
+                        afterHeight,
 
-            console.log(
-                "After height:",
-                afterHeight
-            );
+                    scrollTop:
+                        afterScrollTop,
 
-            console.log(
-                "Before scrollTop:",
-                beforeScrollTop
-            );
-
-            console.log(
-                "After scrollTop:",
-                afterScrollTop
+                    signatureChanged:
+                        afterSignature !==
+                        beforeSignature
+                }
             );
 
 
@@ -2819,11 +2978,9 @@ async function scanResultsAndEnrich(
                 afterHeight >
                 beforeHeight;
 
-
             const resultsChanged =
                 afterSignature !==
                 beforeSignature;
-
 
             const scrollChanged =
                 afterScrollTop >
@@ -2831,33 +2988,39 @@ async function scanResultsAndEnrich(
 
 
             if (
-                !heightChanged &&
-                !resultsChanged &&
-                !scrollChanged
+                heightChanged ||
+                resultsChanged ||
+                scrollChanged
             ) {
 
-                noProgressCount++;
-
+                noProgressCount = 0;
 
                 console.log(
-                    "No new result progress detected:",
-                    noProgressCount
+                    "New results progress detected."
                 );
-
 
             } else {
 
-                noProgressCount = 0;
+                noProgressCount++;
+
+                console.log(
+                    "No progress detected:",
+                    noProgressCount
+                );
 
             }
 
 
+            // ==================================================
+            // Stop only after multiple failures
+            // ==================================================
+
             if (
-                noProgressCount >= 2
+                noProgressCount >= 3
             ) {
 
                 console.log(
-                    "No more results detected."
+                    "No more Google Maps results detected."
                 );
 
                 break;
@@ -2896,6 +3059,118 @@ async function scanResultsAndEnrich(
 
 }
 
+function extractFullAddressFromDetailsPanel() {
+
+    console.log(
+        "Searching for FULL Google Maps address..."
+    );
+
+    // ==================================================
+    // Method 1: Google Maps address data-item-id
+    // ==================================================
+
+    const addressElements =
+        document.querySelectorAll(
+            '[data-item-id="address"]'
+        );
+
+    for (const element of addressElements) {
+
+        const aria =
+            element.getAttribute(
+                "aria-label"
+            ) || "";
+
+        const text =
+            element.innerText?.trim() || "";
+
+        const title =
+            element.getAttribute(
+                "title"
+            ) || "";
+
+        console.log(
+            "Address element found:",
+            {
+                aria,
+                text,
+                title
+            }
+        );
+
+        const candidates = [
+            text,
+            aria,
+            title
+        ];
+
+        for (const candidate of candidates) {
+
+            const cleaned =
+                cleanGoogleMapsAddress(
+                    candidate
+                );
+
+            if (cleaned) {
+
+                console.log(
+                    "FULL ADDRESS FOUND:",
+                    cleaned
+                );
+
+                return cleaned;
+
+            }
+
+        }
+
+    }
+
+
+    // ==================================================
+    // Method 2: Button with address data-item-id
+    // ==================================================
+
+    const addressButton =
+        document.querySelector(
+            'button[data-item-id="address"]'
+        );
+
+    if (addressButton) {
+
+        const text =
+            addressButton.innerText?.trim() || "";
+
+        const aria =
+            addressButton.getAttribute(
+                "aria-label"
+            ) || "";
+
+        const cleaned =
+            cleanGoogleMapsAddress(
+                text || aria
+            );
+
+        if (cleaned) {
+
+            console.log(
+                "FULL ADDRESS FOUND FROM BUTTON:",
+                cleaned
+            );
+
+            return cleaned;
+
+        }
+
+    }
+
+
+    console.warn(
+        "FULL Google Maps address was not found."
+    );
+
+    return "";
+}
 // ======================================================
 // FUNCTION: Extract phone + website from business details
 // ======================================================
@@ -2913,9 +3188,22 @@ function extractDetailsPanel() {
     console.log(
         "================================="
     );
-
+    
+    let address = "";
     let phone = "";
     let website = "";
+
+    // ==================================================
+    // FULL ADDRESS
+    // ==================================================
+
+    address =
+        extractFullAddressFromDetailsPanel();
+
+    console.log(
+        "DETAILS PANEL FULL ADDRESS:",
+        address
+    );
 
     // ==================================================
     // PHONE
@@ -3176,12 +3464,14 @@ function extractDetailsPanel() {
     console.log(
         "DETAILS PANEL DATA:",
         {
+            address,
             phone,
             website
         }
     );
 
     return {
+        address,
         phone,
         website
     };
@@ -3378,6 +3668,9 @@ async function extractAllBusinessDetails() {
     
     const result = {
 
+        address:
+            basicDetails.address || "",
+        
         phone:
             basicDetails.phone || "",
 
@@ -3564,7 +3857,7 @@ function isBusinessDetailsView() {
 
 async function waitForDetailsPanel(
     business,
-    timeout = 15000
+    timeout = 20000
 ) {
 
     console.log(
@@ -3575,23 +3868,32 @@ async function waitForDetailsPanel(
     return waitForCondition(
         () => {
 
-            // --------------------------------------------
-            // 1. Must be on a Google Maps place page
-            // --------------------------------------------
+            // ==================================================
+            // CONDITION 1
+            // Google Maps has navigated to a business page
+            // ==================================================
 
-            if (
-                !window.location.pathname.includes(
+            const onBusinessPage =
+                window.location.pathname.includes(
                     "/maps/place/"
-                )
-            ) {
+                );
 
-                return false;
+            if (onBusinessPage) {
+
+                console.log(
+                    "Google Maps business page detected:",
+                    window.location.href
+                );
+
+                return true;
 
             }
 
-            // --------------------------------------------
-            // 2. Check business name in page
-            // --------------------------------------------
+
+            // ==================================================
+            // CONDITION 2
+            // Business name is visible
+            // ==================================================
 
             const expectedName =
                 (business.name || "")
@@ -3613,7 +3915,7 @@ async function waitForDetailsPanel(
                 ) {
 
                     console.log(
-                        "Business details page detected:",
+                        "Business name detected:",
                         business.name
                     );
 
@@ -3623,17 +3925,28 @@ async function waitForDetailsPanel(
 
             }
 
-            // --------------------------------------------
-            // 3. Check common Google Maps detail elements
-            // --------------------------------------------
+
+            // ==================================================
+            // CONDITION 3
+            // Known Google Maps detail elements
+            // ==================================================
 
             const detailSelectors = [
-                'button[data-item-id^="phone:"]',
-                'a[data-item-id="authority"]',
+
                 '[data-item-id="address"]',
+
+                '[data-item-id^="phone:"]',
+
+                '[data-item-id*="phone" i]',
+
+                'a[data-item-id="authority"]',
+
                 'button[aria-label*="Phone" i]',
+
                 'button[aria-label*="Website" i]'
+
             ];
+
 
             for (
                 const selector of detailSelectors
@@ -3656,6 +3969,7 @@ async function waitForDetailsPanel(
                 }
 
             }
+
 
             return false;
 
@@ -3695,90 +4009,27 @@ async function waitForResultsView(
     );
 
 }
-async function returnToResults(
-    previousScrollTop = 0
-) {
+async function returnToResults(previousScrollTop = 0) {
 
     console.log(
-        "Returning to Google Maps results..."
+        "================================="
     );
 
-     await closeReviewsPanelIfOpen();
-    
-     // ==================================================
-    // Already on results page?
-    // ==================================================
+    console.log(
+        "RETURNING TO GOOGLE MAPS RESULTS"
+    );
 
-    if (
-        !isBusinessDetailsView()
-    ) {
+    console.log(
+        "================================="
+    );
 
-        await waitForResultsView(
-            5000
-        );
+    try {
 
-    } else {
-
-        // ==================================================
-        // Try Google Maps back button
-        // ==================================================
-
-        const backButton =
-            document.querySelector(
-                'button[aria-label*="Back" i]'
-            );
-
-
-        if (backButton) {
-
-            console.log(
-                "Clicking Google Maps back button."
-            );
-
-            backButton.click();
-
-        } else {
-
-            console.log(
-                "Back button not found. Using history.back()."
-            );
-
-            window.history.back();
-
-        }
-
-
-        // ==================================================
-        // Wait until actual result view returns
-        // ==================================================
-
-        await waitForResultsView(
-            12000
-        );
-
-    }
-
-
-    // ==================================================
-    // Restore previous scroll position
-    // ==================================================
-
-    const feed =
-        document.querySelector(
-            'div[role="feed"]'
-        );
-
-
-    if (feed) {
-
-        feed.scrollTo({
-            top:
-                previousScrollTop,
-
-            behavior:
-                "auto"
-        });
-
+        /*
+         * STEP 1
+         * If the Reviews panel is open, close it first.
+         */
+        await closeReviewsPanelIfOpen();
 
         await new Promise(
             resolve =>
@@ -3788,12 +4039,195 @@ async function returnToResults(
                 )
         );
 
+
+        /*
+         * STEP 2
+         * Look for the business-details back button.
+         *
+         * Do NOT blindly use:
+         * button[aria-label*="Back" i]
+         *
+         * because Google Maps may have several Back buttons.
+         */
+        const backButtons =
+            Array.from(
+                document.querySelectorAll(
+                    'button[aria-label*="Back" i]'
+                )
+            ).filter(
+                button =>
+                    isVisibleElement(button)
+            );
+
+
+        console.log(
+            "Visible Back buttons:",
+            backButtons.length
+        );
+
+
+        /*
+         * Try the first visible Back button.
+         *
+         * Google Maps normally uses this to return
+         * from the business details page.
+         */
+        if (
+            isBusinessDetailsView() &&
+            backButtons.length > 0
+        ) {
+
+            console.log(
+                "Clicking visible Google Maps Back button."
+            );
+
+            backButtons[0].click();
+
+        } else if (
+            isBusinessDetailsView()
+        ) {
+
+            console.log(
+                "Google Maps Back button not found."
+            );
+
+            console.log(
+                "Using browser history.back()."
+            );
+
+            window.history.back();
+
+        }
+
+
+        /*
+         * STEP 3
+         *
+         * Do NOT require that the URL stops containing
+         * /maps/place/.
+         *
+         * Google Maps can keep the place URL while restoring
+         * the results interface.
+         *
+         * Instead, wait for the actual results feed and
+         * business cards.
+         */
+        await waitForCondition(
+            () => {
+
+                const feed =
+                    document.querySelector(
+                        'div[role="feed"]'
+                    );
+
+                const cards =
+                    document.querySelectorAll(
+                        'div[role="article"]'
+                    );
+
+
+                return (
+                    feed &&
+                    cards.length > 0
+                );
+
+            },
+            20000,
+            300
+        );
+
+
+        console.log(
+            "Google Maps results feed restored."
+        );
+
+
+        /*
+         * STEP 4
+         * Restore previous scroll position.
+         */
+        const feed =
+            document.querySelector(
+                'div[role="feed"]'
+            );
+
+
+        if (feed) {
+
+            feed.scrollTo({
+                top:
+                    previousScrollTop,
+
+                behavior:
+                    "auto"
+            });
+
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        700
+                    )
+            );
+
+        }
+
+
+        console.log(
+            "================================="
+        );
+
+        console.log(
+            "SUCCESSFULLY RETURNED TO RESULTS"
+        );
+
+        console.log(
+            "================================="
+        );
+
+
+        return true;
+
+    } catch (error) {
+
+        console.error(
+            "Failed to return to results:",
+            error
+        );
+
+        /*
+         * Last recovery attempt.
+         */
+        try {
+
+            console.log(
+                "Trying history.back() as final recovery..."
+            );
+
+            window.history.back();
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        1500
+                    )
+            );
+
+        } catch (recoveryError) {
+
+            console.error(
+                "Final recovery failed:",
+                recoveryError
+            );
+
+        }
+
+
+        return false;
+
     }
-
-
-    console.log(
-        "Google Maps results restored."
-    );
 
 }
 
@@ -3807,6 +4241,7 @@ async function extractDetailsForBusiness(
     ) {
 
         return {
+            address: "",
             phone: "",
             website: "",
             comments: [],
@@ -3874,9 +4309,11 @@ async function extractDetailsForBusiness(
         feed
             ? feed.scrollTop
             : 0;
+            
 
 
     let details = {
+        address: "",
         phone: "",
         website: "",
         comments: [],
@@ -3942,7 +4379,16 @@ async function extractDetailsForBusiness(
 
         await waitForDetailsPanel(
             business,
-            15000
+            20000
+        );
+
+        console.log(
+            "DETAILS PAGE READY:",
+            {
+                url: window.location.href,
+                pathname: window.location.pathname,
+                business: business.name
+            }
         );
 
 
@@ -3954,7 +4400,7 @@ async function extractDetailsForBusiness(
             resolve =>
                 setTimeout(
                     resolve,
-                    1200
+                    1800
                 )
         );
 
@@ -4110,10 +4556,31 @@ async function processVisibleBusinessBatch(
         );
 
 
-    console.log(
-        "Current visible batch:",
-        batch.length
-    );
+   console.log(
+    "================================="
+);
+
+console.log(
+    "CURRENT VISIBLE BATCH:",
+    batch.length
+);
+
+console.log(
+    "BUSINESSES IN BATCH:",
+    batch.map(
+        business => ({
+            name:
+                business.name,
+
+            mapsUrl:
+                business.mapsUrl
+        })
+    )
+);
+
+console.log(
+    "================================="
+);
 
 
     for (
@@ -4124,6 +4591,28 @@ async function processVisibleBusinessBatch(
 
         const visibleBusiness =
             batch[i];
+
+        console.log(
+            "================================="
+        );
+
+        console.log(
+            `PROCESSING BATCH ITEM ${i + 1}/${batch.length}`
+        );
+
+        console.log(
+            "Business:",
+            visibleBusiness.name
+        );
+
+        console.log(
+            "Maps URL:",
+            visibleBusiness.mapsUrl
+        );
+
+        console.log(
+            "================================="
+        );
 
 
         const key =
@@ -4179,10 +4668,7 @@ async function processVisibleBusinessBatch(
         // ==================================================
 
         if (
-            business.phone &&
-            business.website &&
-            business.commentsCollected &&
-            business.photosCollected
+             false
         ) {
 
             console.log(
@@ -4248,6 +4734,11 @@ async function processVisibleBusinessBatch(
         business = {
 
             ...business,
+
+            address:
+                details.address ||
+                business.address ||
+                "",
 
             phone:
                 details.phone ||
@@ -4315,20 +4806,63 @@ async function processVisibleBusinessBatch(
             [business]
         );
 
+        console.log(
+            "================================="
+        );
+
+        console.log(
+            "FINAL BUSINESS BEFORE SAVE:",
+            {
+                name: business.name,
+                address: business.address,
+                phone: business.phone,
+                website: business.website
+            }
+        );
+
+        console.log(
+            "================================="
+        );
+
         // ==================================================
-        // SEND TO LARAVEL
+        // SEND ACTUAL BUSINESS DATA TO LARAVEL
         // ==================================================
 
         try {
+
+            const config =
+                await loadExtractionConfig();
+
+
+            console.log(
+                "Sending actual Google Maps business to Laravel:",
+                {
+                    jobId:
+                        config.jobId,
+
+                    sourceId:
+                        config.sourceId,
+
+                    businessName:
+                        business.name,
+
+                    reviews:
+                        business.comments?.length || 0,
+
+                    photos:
+                        business.photoLinks?.length || 0
+                }
+            );
+
 
             const laravelResult =
                 await sendBusinessToLaravel({
 
                     jobId:
-                        extractionConfig.jobId,
+                        config.jobId,
 
                     sourceId:
-                        extractionConfig.sourceId,
+                        config.sourceId,
 
                     business:
                         business,
@@ -4343,9 +4877,27 @@ async function processVisibleBusinessBatch(
 
 
             console.log(
-                "Laravel import successful:",
+                "================================="
+            );
+
+            console.log(
+                "REAL GOOGLE MAPS DATA SENT TO LARAVEL"
+            );
+
+            console.log(
+                "Business:",
+                business.name
+            );
+
+            console.log(
+                "Laravel result:",
                 laravelResult
             );
+
+            console.log(
+                "================================="
+            );
+
 
         } catch (error) {
 
@@ -4592,77 +5144,235 @@ function findReviewsButton() {
 
 async function openReviewsPanel() {
 
-    const reviewsButton =
-        findReviewsButton();
+    console.log("=================================");
+    console.log("OPENING REVIEWS PANEL");
+    console.log("=================================");
 
+    const reviewsButton = findReviewsButton();
 
     if (!reviewsButton) {
 
-        console.log(
+        console.warn(
             "Reviews button not found."
         );
 
         return false;
-
     }
 
-
     console.log(
-        "Clicking Reviews button..."
+        "Reviews button found:",
+        reviewsButton
     );
-
 
     reviewsButton.scrollIntoView({
         behavior: "auto",
         block: "center"
     });
 
-
-    await new Promise(
-        resolve =>
-            setTimeout(
-                resolve,
-                300
-            )
+    await new Promise(resolve =>
+        setTimeout(resolve, 500)
     );
 
+    // Count existing dialogs before click
+    const dialogsBefore =
+        Array.from(
+            document.querySelectorAll(
+                '[role="dialog"]'
+            )
+        ).filter(
+            dialog => isVisibleElement(dialog)
+        ).length;
+
+    console.log(
+        "Visible dialogs before Reviews click:",
+        dialogsBefore
+    );
 
     reviewsButton.click();
 
+    console.log(
+        "Reviews button clicked."
+    );
+
+    /*
+     * Do NOT require [data-review-id] here.
+     *
+     * Google Maps may load the Reviews UI without
+     * immediately creating review elements.
+     */
 
     try {
 
         await waitForCondition(
             () => {
 
-                return (
+                // -----------------------------------------
+                // 1. Review elements
+                // -----------------------------------------
+
+                const reviewElements =
+                    document.querySelectorAll(
+                        "[data-review-id]"
+                    );
+
+                if (
+                    reviewElements.length > 0
+                ) {
+
+                    console.log(
+                        "Review elements detected:",
+                        reviewElements.length
+                    );
+
+                    return true;
+                }
+
+
+                // -----------------------------------------
+                // 2. Review text
+                // -----------------------------------------
+
+                const reviewText =
                     document.querySelector(
-                        '[data-review-id]'
-                    ) ||
-                    document.querySelector(
-                        '.wiI7pd'
-                    )
-                );
+                        ".wiI7pd"
+                    );
+
+                if (reviewText) {
+
+                    console.log(
+                        "Review text detected."
+                    );
+
+                    return true;
+                }
+
+
+                // -----------------------------------------
+                // 3. Visible dialog
+                // -----------------------------------------
+
+                const dialogs =
+                    Array.from(
+                        document.querySelectorAll(
+                            '[role="dialog"]'
+                        )
+                    ).filter(
+                        dialog =>
+                            isVisibleElement(dialog)
+                    );
+
+                if (
+                    dialogs.length >
+                    dialogsBefore
+                ) {
+
+                    console.log(
+                        "New Google Maps dialog detected."
+                    );
+
+                    return true;
+                }
+
+
+                // -----------------------------------------
+                // 4. Visible text containing Reviews
+                // -----------------------------------------
+
+                for (
+                    const dialog of dialogs
+                ) {
+
+                    const text =
+                        (
+                            dialog.innerText ||
+                            ""
+                        )
+                            .replace(
+                                /\s+/g,
+                                " "
+                            )
+                            .trim();
+
+                    if (
+                        /reviews?/i.test(
+                            text
+                        )
+                    ) {
+
+                        console.log(
+                            "Reviews dialog detected by text."
+                        );
+
+                        return true;
+                    }
+
+                }
+
+
+                // -----------------------------------------
+                // 5. Review-related buttons
+                // -----------------------------------------
+
+                const reviewButtons =
+                    Array.from(
+                        document.querySelectorAll(
+                            'button, [role="button"]'
+                        )
+                    ).filter(
+                        element =>
+                            isVisibleElement(element) &&
+                            /reviews?/i.test(
+                                (
+                                    element.innerText ||
+                                    element.getAttribute(
+                                        "aria-label"
+                                    ) ||
+                                    ""
+                                )
+                            )
+                    );
+
+                if (
+                    reviewButtons.length > 0
+                ) {
+
+                    console.log(
+                        "Review-related UI detected:",
+                        reviewButtons.length
+                    );
+
+                    return true;
+                }
+
+
+                return false;
 
             },
-            10000,
+            15000,
             300
         );
 
+        console.log(
+            "Reviews UI detected."
+        );
+
+        await new Promise(resolve =>
+            setTimeout(resolve, 1200)
+        );
 
         console.log(
-            "Reviews panel loaded."
+            "Current review elements:",
+            document.querySelectorAll(
+                "[data-review-id]"
+            ).length
         );
 
-
-        await new Promise(
-            resolve =>
-                setTimeout(
-                    resolve,
-                    800
-                )
+        console.log(
+            "Current dialogs:",
+            document.querySelectorAll(
+                '[role="dialog"]'
+            ).length
         );
-
 
         return true;
 
@@ -4673,11 +5383,44 @@ async function openReviewsPanel() {
             error
         );
 
+        // IMPORTANT DEBUG INFORMATION
+
+        console.log(
+            "========== REVIEW DEBUG =========="
+        );
+
+        console.log(
+            "Current URL:",
+            window.location.href
+        );
+
+        console.log(
+            "data-review-id count:",
+            document.querySelectorAll(
+                "[data-review-id]"
+            ).length
+        );
+
+        console.log(
+            ".wiI7pd count:",
+            document.querySelectorAll(
+                ".wiI7pd"
+            ).length
+        );
+
+        console.log(
+            "Dialog count:",
+            document.querySelectorAll(
+                '[role="dialog"]'
+            ).length
+        );
+
+        console.log(
+            "=================================="
+        );
 
         return false;
-
     }
-
 }
 
 function expandReviewTexts() {
@@ -5114,77 +5857,197 @@ async function scrollReviewsAndCollect() {
 
 async function closeReviewsPanelIfOpen() {
 
+    console.log(
+        "Checking whether Reviews UI is open..."
+    );
+
+    const dialogs =
+        Array.from(
+            document.querySelectorAll(
+                '[role="dialog"]'
+            )
+        ).filter(
+            dialog =>
+                isVisibleElement(dialog)
+        );
+
+    console.log(
+        "Visible dialogs:",
+        dialogs.length
+    );
+
+    let reviewDialog = null;
+
+    for (
+        const dialog of dialogs
+    ) {
+
+        const text =
+            (
+                dialog.innerText ||
+                ""
+            )
+                .replace(
+                    /\s+/g,
+                    " "
+                )
+                .trim();
+
+        if (
+            /reviews?/i.test(text)
+        ) {
+
+            reviewDialog =
+                dialog;
+
+            break;
+        }
+    }
+
     const reviewElements =
         document.querySelectorAll(
             "[data-review-id]"
         );
 
+    /*
+     * If there is no review dialog and no review
+     * element, there is nothing to close.
+     */
+
     if (
+        !reviewDialog &&
         reviewElements.length === 0
     ) {
 
-        return false;
+        console.log(
+            "Reviews UI does not appear to be open."
+        );
 
+        return false;
     }
 
-
     console.log(
-        "Reviews panel appears to be open."
+        "Reviews UI appears to be open."
     );
 
 
-    const backButton =
-        document.querySelector(
-            'button[aria-label*="Back" i]'
-        );
+    // --------------------------------------------------
+    // Find Back button inside review dialog
+    // --------------------------------------------------
+
+    let backButton = null;
+
+    if (reviewDialog) {
+
+        const buttons =
+            Array.from(
+                reviewDialog.querySelectorAll(
+                    'button, [role="button"]'
+                )
+            ).filter(
+                button =>
+                    isVisibleElement(button)
+            );
+
+        for (
+            const button of buttons
+        ) {
+
+            const label =
+                (
+                    button.getAttribute(
+                        "aria-label"
+                    ) ||
+                    button.innerText ||
+                    ""
+                )
+                    .trim();
+
+            if (
+                /back|close/i.test(
+                    label
+                )
+            ) {
+
+                backButton =
+                    button;
+
+                break;
+            }
+        }
+    }
+
+
+    // --------------------------------------------------
+    // Fallback: visible Back buttons
+    // --------------------------------------------------
+
+    if (!backButton) {
+
+        const buttons =
+            Array.from(
+                document.querySelectorAll(
+                    'button, [role="button"]'
+                )
+            ).filter(
+                button =>
+                    isVisibleElement(button)
+            );
+
+        for (
+            const button of buttons
+        ) {
+
+            const label =
+                (
+                    button.getAttribute(
+                        "aria-label"
+                    ) ||
+                    button.innerText ||
+                    ""
+                )
+                    .trim();
+
+            if (
+                /back/i.test(
+                    label
+                )
+            ) {
+
+                backButton =
+                    button;
+
+                break;
+            }
+        }
+    }
 
 
     if (!backButton) {
 
         console.warn(
-            "Review panel back button not found."
+            "Reviews UI appears open, but no Back/Close button was found."
         );
 
         return false;
-
     }
 
+
+    console.log(
+        "Closing Reviews UI..."
+    );
 
     backButton.click();
 
+    await new Promise(resolve =>
+        setTimeout(resolve, 1000)
+    );
 
-    try {
+    console.log(
+        "Reviews UI close action completed."
+    );
 
-        await waitForCondition(
-            () => {
-
-                return (
-                    document.querySelectorAll(
-                        "[data-review-id]"
-                    ).length === 0
-                );
-
-            },
-            5000,
-            300
-        );
-
-        console.log(
-            "Reviews panel closed."
-        );
-
-        return true;
-
-    } catch (error) {
-
-        console.warn(
-            "Could not confirm review panel closure."
-        );
-
-        return false;
-
-    }
-
+    return true;
 }
 
 // ======================================================
@@ -5390,5 +6253,41 @@ function extractVisiblePhotoLinks() {
 
 
     return result;
+
+}
+
+// ======================================================
+// LOAD LARAVEL EXTRACTION CONFIGURATION
+// ======================================================
+
+async function loadExtractionConfig() {
+
+    const result =
+        await chrome.storage.local.get(
+            ["extractionConfig"]
+        );
+
+    const config =
+        result.extractionConfig || {};
+
+    const jobId =
+        Number(config.jobId);
+
+    const sourceId =
+        Number(config.sourceId);
+
+    if (!jobId || !sourceId) {
+
+        throw new Error(
+            "Laravel extraction configuration is missing. " +
+            "Please save Job ID and Source ID from the extension popup."
+        );
+
+    }
+
+    return {
+        jobId,
+        sourceId
+    };
 
 }

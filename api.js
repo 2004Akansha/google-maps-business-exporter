@@ -1,6 +1,34 @@
+// ======================================================
+// GOOGLE MAPS BUSINESS EXPORTER - api.js
+// Laravel Data Adapter
+// ======================================================
+
 console.log("✅ api.js loaded successfully");
 
-const LARAVEL_API_BASE = "http://127.0.0.1:8000";
+
+// ======================================================
+// LARAVEL API CONFIGURATION
+// ======================================================
+
+const LARAVEL_API_BASE =
+    "http://127.0.0.1:8000";
+
+
+// ======================================================
+// SEND BUSINESS DATA TO LARAVEL
+// ======================================================
+//
+// This function receives REAL data extracted by content.js.
+//
+// content.js
+//     ↓
+// sendBusinessToLaravel()
+//     ↓
+// service-worker.js
+//     ↓
+// Laravel API
+//
+// ======================================================
 
 async function sendBusinessToLaravel({
     jobId,
@@ -10,113 +38,296 @@ async function sendBusinessToLaravel({
     photos = []
 }) {
 
-    const payload = {
+    // --------------------------------------------------
+    // Validate Job ID
+    // --------------------------------------------------
 
-        job_id: jobId,
+    if (!jobId) {
 
-        source_id: sourceId,
+        throw new Error(
+            "Missing Laravel Job ID."
+        );
 
-        business: {
+    }
 
-            name: business.name || "",
 
-            category: business.category || null,
+    // --------------------------------------------------
+    // Validate Source ID
+    // --------------------------------------------------
 
-            address: business.address || null,
+    if (!sourceId) {
 
-            phone: business.phone || null,
+        throw new Error(
+            "Missing Laravel Source ID."
+        );
 
-            website: business.website || null,
+    }
 
-            rating:
-                business.rating !== undefined &&
-                business.rating !== null
-                    ? Number(business.rating)
-                    : null,
 
-            review_count:
-                typeof business.reviews === "number"
-                    ? business.reviews
-                    : 0,
+    // --------------------------------------------------
+    // Validate business
+    // --------------------------------------------------
 
-            maps_url:
+    if (!business) {
+
+        throw new Error(
+            "Business data is missing."
+        );
+
+    }
+
+
+    if (!business.name) {
+
+        throw new Error(
+            "Business name is missing."
+        );
+
+    }
+
+
+    // ==================================================
+    // BUILD LARAVEL BUSINESS DATA
+    // ==================================================
+
+    const laravelBusiness = {
+
+        name:
+            business.name || "",
+
+        category:
+            business.category || null,
+
+        address:
+            business.address || null,
+
+        phone:
+            business.phone || null,
+
+        website:
+            business.website || null,
+
+        rating:
+            business.rating !== undefined &&
+            business.rating !== null &&
+            business.rating !== ""
+                ? Number(business.rating)
+                : null,
+
+        review_count:
+            typeof business.reviews === "number"
+                ? business.reviews
+                : (
+                    Number(
+                        String(
+                            business.reviews || "0"
+                        ).replace(/,/g, "")
+                    ) || 0
+                ),
+
+        maps_url:
+            business.mapsUrl ||
+            business.maps_url ||
+            null,
+
+        external_id:
+            business.external_id ||
+            business.id ||
+            normalizeMapsUrl(
                 business.mapsUrl ||
                 business.maps_url ||
-                null,
-
-            external_id:
-                business.external_id ||
-                business.id ||
-                null
-        },
-
-
-        reviews: reviews.map(review => ({
-
-            external_review_id:
-                review.id || null,
-
-            author:
-                review.author || "Unknown",
-
-            rating:
-                review.rating !== undefined &&
-                review.rating !== null
-                    ? Number(review.rating)
-                    : null,
-
-            review_date:
-                review.date || null,
-
-            review_text:
-                review.text || null,
-
-            owner_response:
-                review.ownerResponse || null,
-
-            source_url:
-                business.mapsUrl || null
-        })),
-
-
-        photos: photos.map(photo => ({
-
-            photo_key:
-                typeof photo === "string"
-                    ? photo
-                    : (
-                        photo.key ||
-                        photo.id ||
-                        null
-                    ),
-
-            photo_url:
-                typeof photo === "string"
-                    ? photo
-                    : photo.url,
-
-            photo_type: "business",
-
-            source_url:
-                business.mapsUrl || null
-        }))
+                ""
+            ) ||
+            null
     };
 
 
+    // ==================================================
+    // BUILD LARAVEL REVIEWS
+    // ==================================================
+
+    const laravelReviews =
+        Array.isArray(reviews)
+            ? reviews.map((review, index) => {
+
+                return {
+
+                    external_review_id:
+                        review.id ||
+                        review.external_review_id ||
+                        `review-${index}-${Date.now()}`,
+
+                    author:
+                        review.author ||
+                        "Google Maps User",
+
+                    rating:
+                        review.rating !== undefined &&
+                        review.rating !== null &&
+                        review.rating !== ""
+                            ? Number(review.rating)
+                            : null,
+
+                    review_date:
+                        review.date ||
+                        review.review_date ||
+                        null,
+
+                    review_text:
+                        review.text ||
+                        review.review_text ||
+                        "",
+
+                    owner_response:
+                        review.ownerResponse ||
+                        review.owner_response ||
+                        null,
+
+                    source_url:
+                        business.mapsUrl ||
+                        business.maps_url ||
+                        null
+
+                };
+
+            })
+            : [];
+
+
+    // ==================================================
+    // BUILD LARAVEL PHOTOS
+    // ==================================================
+
+    const laravelPhotos =
+        Array.isArray(photos)
+            ? photos
+                .map((photo, index) => {
+
+                    const photoUrl =
+                        typeof photo === "string"
+                            ? photo
+                            : (
+                                photo?.url ||
+                                photo?.photo_url ||
+                                ""
+                            );
+
+
+                    const photoKey =
+                        typeof photo === "string"
+                            ? photoUrl
+                            : (
+                                photo?.key ||
+                                photo?.photo_key ||
+                                photo?.id ||
+                                photoUrl ||
+                                `photo-${index}-${Date.now()}`
+                            );
+
+
+                    return {
+
+                        photo_key:
+                            photoKey,
+
+                        photo_url:
+                            photoUrl,
+
+                        photo_type:
+                            "business",
+
+                        source_url:
+                            business.mapsUrl ||
+                            business.maps_url ||
+                            null
+
+                    };
+
+                })
+                .filter(photo => photo.photo_url)
+            : [];
+
+
+    // ==================================================
+    // FINAL LARAVEL PAYLOAD
+    // ==================================================
+
+    const payload = {
+
+        job_id:
+            Number(jobId),
+
+        source_id:
+            Number(sourceId),
+
+        business:
+            laravelBusiness,
+
+        reviews:
+            laravelReviews,
+
+        photos:
+            laravelPhotos
+
+    };
+
+
+    // ==================================================
+    // LOG REAL DATA
+    // ==================================================
+
     console.log(
-        "Sending business to extension service worker:",
+        "================================="
+    );
+
+    console.log(
+        "SENDING REAL MAPS DATA TO LARAVEL"
+    );
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "Business:",
+        laravelBusiness
+    );
+
+    console.log(
+        "Reviews:",
+        laravelReviews.length
+    );
+
+    console.log(
+        "Photos:",
+        laravelPhotos.length
+    );
+
+    console.log(
+        "Laravel payload:",
         payload
     );
 
 
-    const response = await chrome.runtime.sendMessage({
+    // ==================================================
+    // SEND TO EXTENSION SERVICE WORKER
+    // ==================================================
 
-        type: "IMPORT_BUSINESS",
+    const response =
+        await chrome.runtime.sendMessage({
 
-        payload: payload
+            type:
+                "IMPORT_BUSINESS",
 
-    });
+            payload:
+                payload
 
+        });
+
+
+    // ==================================================
+    // VALIDATE SERVICE WORKER RESPONSE
+    // ==================================================
 
     if (!response) {
 
@@ -137,108 +348,68 @@ async function sendBusinessToLaravel({
     }
 
 
+    // ==================================================
+    // SUCCESS
+    // ==================================================
+
     console.log(
-        "Laravel import successful:",
+        "✅ Real Maps business imported into Laravel:",
         response.data
     );
 
 
     return response.data;
+
 }
 
-async function testLaravelConnection() {
 
-    console.log(
-        "🧪 Running Laravel connection test..."
-    );
+// ======================================================
+// NORMALIZE GOOGLE MAPS URL
+// ======================================================
+//
+// Used as a fallback external_id when the extractor
+// does not provide a stable business ID.
+//
+// ======================================================
 
+function normalizeMapsUrl(url) {
 
-    const testBusiness = {
+    if (!url) {
 
-        id: "extension-test-001",
+        return "";
 
-        name: "Chrome Extension Test Restaurant",
-
-        category: "Restaurant",
-
-        address: "Nagpur, Maharashtra",
-
-        phone: "9876543210",
-
-        website: "https://example.com",
-
-        rating: 4.5,
-
-        reviews: 25,
-
-        mapsUrl: "https://www.google.com/maps/"
-    };
-
-
-    const testReviews = [
-
-        {
-            id: "extension-review-001",
-
-            author: "Test User",
-
-            rating: 5,
-
-            date: "2026-09-20",
-
-            text: "Testing Chrome extension integration.",
-
-            ownerResponse: null
-        }
-
-    ];
-
-
-    const testPhotos = [
-
-        {
-            id: "extension-photo-001",
-
-            url: "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4"
-        }
-
-    ];
+    }
 
 
     try {
 
-        const result =
-            await sendBusinessToLaravel({
-
-                jobId: 1,
-
-                sourceId: 1,
-
-                business: testBusiness,
-
-                reviews: testReviews,
-
-                photos: testPhotos
-
-            });
+        const parsedUrl =
+            new URL(url);
 
 
-        console.log(
-            "✅ Laravel connection test successful:",
-            result
+        return (
+            parsedUrl.origin +
+            parsedUrl.pathname
         );
-
 
     } catch (error) {
 
-        console.error(
-            "❌ Laravel connection test failed:",
+        console.warn(
+            "Failed to normalize Maps URL:",
             error
         );
 
+        return url;
+
     }
+
 }
-setTimeout(() => {
-    testLaravelConnection();
-}, 3000);
-console.log("✅ sendBusinessToLaravel is available inside content-script world");
+
+
+// ======================================================
+// READY
+// ======================================================
+
+console.log(
+    "✅ sendBusinessToLaravel is ready for real Maps data."
+);

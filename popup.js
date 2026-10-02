@@ -331,7 +331,7 @@ document.getElementById("clear").addEventListener(
 // ======================================================
 
 document.getElementById(
-    "startSearch"
+    "startExtraction"
 ).addEventListener(
     "click",
     async () => {
@@ -341,22 +341,53 @@ document.getElementById(
                 "businessType"
             ).value.trim();
 
+
         const city =
             document.getElementById(
                 "city"
             ).value.trim();
 
 
-        // --------------------------------------------------
-        // Validate business type
-        // --------------------------------------------------
-
-        if (!businessType) {
-
+        const status =
             document.getElementById(
                 "status"
-            ).textContent =
-                "Please select a business type.";
+            );
+
+
+        // --------------------------------------------------
+        // Get saved Laravel configuration
+        // --------------------------------------------------
+
+        const result =
+            await chrome.storage.local.get(
+                ["extractionConfig"]
+            );
+
+
+        const extractionConfig =
+            result.extractionConfig;
+
+
+        if (!extractionConfig) {
+
+            status.textContent =
+                "Please load a Laravel Job first.";
+
+            status.style.color =
+                "red";
+
+            return;
+
+        }
+
+
+        if (!extractionConfig.jobId) {
+
+            status.textContent =
+                "Invalid Laravel Job.";
+
+            status.style.color =
+                "red";
 
             return;
 
@@ -369,10 +400,11 @@ document.getElementById(
 
         if (!city) {
 
-            document.getElementById(
-                "status"
-            ).textContent =
+            status.textContent =
                 "Please enter a city.";
+
+            status.style.color =
+                "red";
 
             return;
 
@@ -380,7 +412,7 @@ document.getElementById(
 
 
         // --------------------------------------------------
-        // Automatically create search query
+        // Create search query
         // --------------------------------------------------
 
         const searchQuery =
@@ -389,14 +421,48 @@ document.getElementById(
             city;
 
 
+        // --------------------------------------------------
+        // Save final extraction configuration
+        // --------------------------------------------------
+
+        await chrome.storage.local.set({
+
+            extractionConfig: {
+
+                ...extractionConfig,
+
+                searchQuery:
+                    searchQuery,
+
+                collectBusinessDetails:
+                    document.getElementById(
+                        "collectBusinessDetails"
+                    ).checked,
+
+                collectReviews:
+                    document.getElementById(
+                        "collectReviews"
+                    ).checked,
+
+                collectPhotos:
+                    document.getElementById(
+                        "collectPhotos"
+                    ).checked
+
+            }
+
+        });
+
+
         console.log(
-            "Automatic search query:",
-            searchQuery
+            "Starting extraction:",
+            searchQuery,
+            extractionConfig
         );
 
 
         // --------------------------------------------------
-        // Create Google Maps search URL
+        // Open Google Maps
         // --------------------------------------------------
 
         const mapsUrl =
@@ -406,25 +472,12 @@ document.getElementById(
             );
 
 
-        console.log(
-            "Opening Google Maps:",
-            mapsUrl
-        );
+        status.textContent =
+            "Opening Google Maps...";
 
+        status.style.color =
+            "green";
 
-        // --------------------------------------------------
-        // Update status
-        // --------------------------------------------------
-
-        document.getElementById(
-            "status"
-        ).textContent =
-            "Opening Google Maps and starting automatic collection...";
-
-
-        // --------------------------------------------------
-        // Open Google Maps with search already performed
-        // --------------------------------------------------
 
         try {
 
@@ -433,10 +486,8 @@ document.getElementById(
             });
 
 
-            document.getElementById(
-                "status"
-            ).textContent =
-                "Google Maps search started. Automatic collection is active.";
+            status.textContent =
+                "Google Maps opened. Extraction started.";
 
 
         } catch (error) {
@@ -447,10 +498,11 @@ document.getElementById(
             );
 
 
-            document.getElementById(
-                "status"
-            ).textContent =
+            status.textContent =
                 "Failed to open Google Maps.";
+
+            status.style.color =
+                "red";
 
         }
 
@@ -468,258 +520,51 @@ document.getElementById("closePopup").addEventListener(
         window.close();
 
     }
+    
 );
 
 // ======================================================
-// LARAVEL EXTRACTION CONFIGURATION
+// LOAD LARAVEL EXTRACTION JOB
 // ======================================================
 
-document.addEventListener("DOMContentLoaded", async () => {
-
-    const jobIdInput = document.getElementById("jobId");
-    const sourceIdInput = document.getElementById("sourceId");
-    const saveConfigButton = document.getElementById("saveConfig");
-    const configStatus = document.getElementById("configStatus");
-
-
-    // Make sure the Laravel section exists
-    if (
-        !jobIdInput ||
-        !sourceIdInput ||
-        !saveConfigButton ||
-        !configStatus
-    ) {
-        console.warn(
-            "Laravel extraction configuration elements not found."
-        );
-
-        return;
-    }
-
-
-    // --------------------------------------------------
-    // Load previously saved configuration
-    // --------------------------------------------------
-
-    const result = await chrome.storage.local.get(
-        ["extractionConfig"]
-    );
-
-
-    if (result.extractionConfig) {
-
-        jobIdInput.value =
-            result.extractionConfig.jobId || "";
-
-        sourceIdInput.value =
-            result.extractionConfig.sourceId || "";
-
-    }
-
-
-    // --------------------------------------------------
-    // Save configuration
-    // --------------------------------------------------
-
-    saveConfigButton.addEventListener(
-        "click",
-        async () => {
-
-            const jobId =
-                Number(jobIdInput.value);
-
-            const sourceId =
-                Number(sourceIdInput.value);
-
-
-            if (!jobId || !sourceId) {
-
-                configStatus.textContent =
-                    "Please enter valid Job ID and Source ID.";
-
-                configStatus.style.color = "red";
-
-                return;
-            }
-
-
-            await chrome.storage.local.set({
-
-                extractionConfig: {
-                    jobId: jobId,
-                    sourceId: sourceId
-                }
-
-            });
-
-
-            configStatus.textContent =
-                `Saved successfully — Job ${jobId}, Source ${sourceId}`;
-
-            configStatus.style.color = "green";
-
-
-            console.log(
-                "Laravel extraction configuration saved:",
-                {
-                    jobId,
-                    sourceId
-                }
-            );
-
-        }
-    );
-
-});
-// ======================================================
-// TEST LARAVEL CONNECTION
-// ======================================================
-
-document.getElementById("testLaravel").addEventListener(
+document.getElementById(
+    "loadJob"
+).addEventListener(
     "click",
     async () => {
 
         const jobId =
             Number(
-                document.getElementById("jobId").value
+                document.getElementById(
+                    "jobId"
+                ).value
             );
 
-        const sourceId =
-            Number(
-                document.getElementById("sourceId").value
-            );
 
-        const status =
+        const jobStatus =
             document.getElementById(
-                "laravelTestStatus"
+                "jobStatus"
             );
 
 
-        // --------------------------------------------------
-        // Validate configuration
-        // --------------------------------------------------
+        if (!jobId) {
 
-        if (!jobId || !sourceId) {
+            jobStatus.textContent =
+                "Please enter a valid Job ID.";
 
-            status.textContent =
-                "Please enter and save Job ID and Source ID first.";
-
-            status.style.color = "red";
+            jobStatus.style.color =
+                "red";
 
             return;
         }
 
 
-        // --------------------------------------------------
-        // Show testing status
-        // --------------------------------------------------
+        jobStatus.textContent =
+            "Loading job...";
 
-        status.textContent =
-            "Testing Laravel connection...";
+        jobStatus.style.color =
+            "orange";
 
-        status.style.color = "orange";
-
-
-        console.log(
-            "Testing Laravel from popup...",
-            {
-                jobId,
-                sourceId
-            }
-        );
-
-
-        // --------------------------------------------------
-        // Create test business
-        // --------------------------------------------------
-
-        const testBusiness = {
-
-            id:
-                "popup-test-" +
-                Date.now(),
-
-            name:
-                "Popup Test Restaurant",
-
-            category:
-                "Restaurant",
-
-            address:
-                "Nagpur, Maharashtra",
-
-            phone:
-                "9876543210",
-
-            website:
-                "https://example.com",
-
-            rating:
-                4.5,
-
-            reviews:
-                25,
-
-            mapsUrl:
-                "https://www.google.com/maps/"
-        };
-
-
-        // --------------------------------------------------
-        // Create test review
-        // --------------------------------------------------
-
-        const testReviews = [
-
-            {
-
-                id:
-                    "popup-review-" +
-                    Date.now(),
-
-                author:
-                    "Popup Test User",
-
-                rating:
-                    5,
-
-                date:
-                    "2026-09-20",
-
-                text:
-                    "Testing Laravel integration from extension popup.",
-
-                ownerResponse:
-                    null
-
-            }
-
-        ];
-
-
-        // --------------------------------------------------
-        // Create test photo
-        // --------------------------------------------------
-
-        const testPhotos = [
-
-            {
-
-                id:
-                    "popup-photo-" +
-                    Date.now(),
-
-                url:
-                    "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4"
-
-            }
-
-        ];
-
-
-        // --------------------------------------------------
-        // Send to service worker
-        // --------------------------------------------------
 
         try {
 
@@ -727,163 +572,123 @@ document.getElementById("testLaravel").addEventListener(
                 await chrome.runtime.sendMessage({
 
                     type:
-                        "IMPORT_BUSINESS",
+                        "GET_EXTRACTION_JOB",
 
-                    payload: {
-
-                        job_id:
-                            jobId,
-
-                        source_id:
-                            sourceId,
-
-                        business: {
-
-                            name:
-                                testBusiness.name,
-
-                            category:
-                                testBusiness.category,
-
-                            address:
-                                testBusiness.address,
-
-                            phone:
-                                testBusiness.phone,
-
-                            website:
-                                testBusiness.website,
-
-                            rating:
-                                testBusiness.rating,
-
-                            review_count:
-                                testBusiness.reviews,
-
-                            maps_url:
-                                testBusiness.mapsUrl,
-
-                            external_id:
-                                testBusiness.id
-
-                        },
-
-                        reviews:
-                            testReviews.map(review => ({
-
-                                external_review_id:
-                                    review.id,
-
-                                author:
-                                    review.author,
-
-                                rating:
-                                    review.rating,
-
-                                review_date:
-                                    review.date,
-
-                                review_text:
-                                    review.text,
-
-                                owner_response:
-                                    review.ownerResponse,
-
-                                source_url:
-                                    testBusiness.mapsUrl
-
-                            })),
-
-                        photos:
-                            testPhotos.map(photo => ({
-
-                                photo_key:
-                                    photo.id,
-
-                                photo_url:
-                                    photo.url,
-
-                                photo_type:
-                                    "business",
-
-                                source_url:
-                                    testBusiness.mapsUrl
-
-                            }))
-
-                    }
+                    jobId:
+                        jobId
 
                 });
 
 
-            // --------------------------------------------------
-            // No response
-            // --------------------------------------------------
-
-            if (!response) {
+            if (
+                !response ||
+                !response.success
+            ) {
 
                 throw new Error(
-                    "No response received from service worker."
+                    response?.error ||
+                    "Failed to load extraction job."
                 );
 
             }
 
 
-            // --------------------------------------------------
-            // Laravel returned an error
-            // --------------------------------------------------
+            const job =
+                response.data.data;
 
-            if (!response.success) {
-
-                throw new Error(
-                    response.error ||
-                    "Laravel import failed."
-                );
-
-            }
-
-
-            // --------------------------------------------------
-            // Success
-            // --------------------------------------------------
 
             console.log(
-                "Laravel test successful:",
-                response.data
+                "Loaded Laravel job:",
+                job
             );
 
 
-            status.textContent =
-                "✅ Laravel connection successful!";
+            // --------------------------------------------------
+            // Save job configuration
+            // --------------------------------------------------
 
-            status.style.color = "green";
+            await chrome.storage.local.set({
+
+                extractionConfig: {
+
+                    jobId:
+                        job.id,
+
+                    sourceId:
+                        job.source_id,
+
+                    searchQuery:
+                        job.search_query,
+
+                    collectBusinessDetails:
+                        job.collect_business_details,
+
+                    collectReviews:
+                        job.collect_reviews,
+
+                    collectPhotos:
+                        job.collect_photos
+
+                }
+
+            });
+
+
+            // --------------------------------------------------
+            // Update UI
+            // --------------------------------------------------
+
+            document.getElementById(
+                "sourceName"
+            ).textContent =
+                job.source_name || "-";
 
 
             document.getElementById(
-                "status"
+                "jobSearchQuery"
             ).textContent =
-                "Test business imported into Laravel.";
+                job.search_query || "-";
 
 
-            console.log(
-                "Laravel response:",
-                response.data
-            );
+            document.getElementById(
+                "collectBusinessDetails"
+            ).checked =
+                job.collect_business_details;
+
+
+            document.getElementById(
+                "collectReviews"
+            ).checked =
+                job.collect_reviews;
+
+
+            document.getElementById(
+                "collectPhotos"
+            ).checked =
+                job.collect_photos;
+
+
+            jobStatus.textContent =
+                `✓ Job ${job.id} loaded successfully.`;
+
+            jobStatus.style.color =
+                "green";
 
 
         } catch (error) {
 
             console.error(
-                "Laravel popup test failed:",
+                "Load job error:",
                 error
             );
 
 
-            status.textContent =
-                "❌ Laravel connection failed: " +
+            jobStatus.textContent =
+                "❌ " +
                 error.message;
 
-            status.style.color = "red";
+            jobStatus.style.color =
+                "red";
 
         }
 

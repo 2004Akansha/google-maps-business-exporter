@@ -13,7 +13,6 @@
 
 <body>
 
-    
     <!-- ======================================================
         HEADER
     ====================================================== -->
@@ -35,90 +34,88 @@
 
 
     <!-- ======================================================
-        AUTOMATIC SEARCH
+        SEARCH
     ====================================================== -->
 
-    <h3>Automatic Search</h3>
+    <div class="section">
 
-    <label for="businessType">
-        Business Type:
-    </label>
-
-    <select id="businessType">
-
-        <option value="restaurants">
-            Restaurants
-        </option>
-
-        <option value="cafes">
-            Cafes
-        </option>
-
-        <option value="hotels">
-            Hotels
-        </option>
-
-        <option value="hospitals">
-            Hospitals
-        </option>
-
-        <option value="schools">
-            Schools
-        </option>
-
-        <option value="colleges">
-            Colleges
-        </option>
-
-        <option value="gyms">
-            Gyms
-        </option>
-
-        <option value="salons">
-            Salons
-        </option>
-
-        <option value="pharmacies">
-            Pharmacies
-        </option>
-
-        <option value="IT companies">
-            IT Companies
-        </option>
-
-    </select>
+        <h3>Search</h3>
 
 
-    <label for="city">
-        City:
-    </label>
+        <label for="businessType">
+            Business Type
+        </label>
 
-    <input
-        type="text"
-        id="city"
-        placeholder="Enter city"
-        value="Nagpur"
-    >
+        <select id="businessType">
+
+            <option value="restaurants">
+                Restaurants
+            </option>
+
+            <option value="cafes">
+                Cafes
+            </option>
+
+            <option value="hotels">
+                Hotels
+            </option>
+
+            <option value="hospitals">
+                Hospitals
+            </option>
+
+            <option value="schools">
+                Schools
+            </option>
+
+            <option value="colleges">
+                Colleges
+            </option>
+
+            <option value="gyms">
+                Gyms
+            </option>
+
+            <option value="salons">
+                Salons
+            </option>
+
+            <option value="pharmacies">
+                Pharmacies
+            </option>
+
+            <option value="IT companies">
+                IT Companies
+            </option>
+
+        </select>
 
 
-    <button id="startSearch">
-        Start Automatic Search
-    </button>
+        <label for="city">
+            City
+        </label>
 
+        <input
+            type="text"
+            id="city"
+            placeholder="Enter city"
+            value="Nagpur"
+        >
 
-        <p id="searchStatus"></p>
+    </div>
 
 
     <!-- ======================================================
-        LARAVEL EXTRACTION
+        LARAVEL JOB
     ====================================================== -->
 
-    <div class="config-section">
+    <div class="section">
 
-        <h3>Laravel Extraction</h3>
+        <h3>Laravel Job</h3>
+
 
         <label for="jobId">
-            Job ID:
+            Job ID
         </label>
 
         <input
@@ -129,62 +126,169 @@
         >
 
 
-        <label for="sourceId">
-            Source ID:
-        </label>
-
-        <input
-            type="number"
-            id="sourceId"
-            placeholder="Example: 1"
-            min="1"
-        >
-
-
-        <button id="saveConfig">
-            Save Configuration
+        <button id="loadJob">
+            Load Job
         </button>
 
 
-        <p id="configStatus"></p>
+        <p id="jobStatus"></p>
 
-        <button id="testLaravel">
-            Test Laravel Connection
-        >
 
-        <p id="laravelTestStatus"></p>
+        <div id="jobDetails">
+
+            <p>
+                Source:
+                <strong id="sourceName">-</strong>
+            </p>
+
+            <p>
+                Search:
+                <strong id="jobSearchQuery">-</strong>
+            </p>
+
+        </div>
 
     </div>
 
 
     <!-- ======================================================
-        BUSINESS DATA
+        DATA TO COLLECT
     ====================================================== -->
 
-    <p id="count">
-        Businesses collected: 0
-    </p>
+    <div class="section">
 
-    <p id="autoStatus">
-        Automatic collection is active on Google Maps.
-    </p>
+        <h3>Data to collect</h3>
+
+
+        <label>
+
+            <input
+                type="checkbox"
+                id="collectBusinessDetails"
+                checked
+            >
+
+            Business Details
+
+        </label>
+
+
+        <label>
+
+            <input
+                type="checkbox"
+                id="collectReviews"
+                checked
+            >
+
+            Reviews
+
+        </label>
+
+
+        <label>
+
+            <input
+                type="checkbox"
+                id="collectPhotos"
+                checked
+            >
+
+            Photos
+
+        </label>
+
+    </div>
+
+
+    <!-- ======================================================
+        START EXTRACTION
+    ====================================================== -->
+
+    <button
+        id="startExtraction"
+        class="primary-button"
+    >
+        Start Extraction
+    </button>
+
+
+    <p id="status"></p>
+
+
+    <!-- ======================================================
+        EXTRACTION STATISTICS
+    ====================================================== -->
+
+    <div class="section">
+
+        <h3>Extraction Status</h3>
+
+
+        <p id="count">
+            Businesses collected: 0
+        </p>
+
+
+        <p id="progress">
+            Ready
+        </p>
+
+
+        <p id="autoStatus">
+            Waiting for extraction.
+        </p>
+
+    </div>
+
+
+    <!-- ======================================================
+        LARAVEL STATISTICS
+    ====================================================== -->
+
+    <div class="section">
+
+        <h3>Laravel</h3>
+
+
+        <p>
+            Businesses imported:
+            <strong id="laravelBusinesses">
+                0
+            </strong>
+        </p>
+
+
+        <p>
+            Reviews imported:
+            <strong id="laravelReviews">
+                0
+            </strong>
+        </p>
+
+
+        <p>
+            Photos imported:
+            <strong id="laravelPhotos">
+                0
+            </strong>
+        </p>
+
+    </div>
+
+
+    <!-- ======================================================
+        ACTIONS
+    ====================================================== -->
 
     <button id="export">
         Export CSV
     </button>
 
+
     <button id="clear">
         Clear Data
     </button>
-
-
-    <!-- ======================================================
-        STATUS
-    ====================================================== -->
-
-    <p id="status"></p>
-
-    <p id="progress"></p>
 
 
     <!-- ======================================================
