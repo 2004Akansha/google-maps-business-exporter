@@ -1,12 +1,16 @@
 body {
     width: 300px;
+    max-height: 600px;
+    overflow-y: auto;
     padding: 15px;
     font-family: Arial, sans-serif;
+    box-sizing: border-box;
 }
 
 h2 {
     text-align: center;
     font-size: 18px;
+    margin-top: 0;
 }
 
 h3 {
@@ -22,11 +26,18 @@ label {
 }
 
 select,
-input {
+input[type="text"],
+input[type="number"] {
     width: 100%;
     box-sizing: border-box;
     padding: 8px;
     margin-bottom: 5px;
+}
+
+input[type="checkbox"] {
+    width: auto;
+    padding: 0;
+    margin: 0 6px 0 0;
 }
 
 button {
@@ -52,6 +63,19 @@ button {
     font-size: 12px;
 }
 
+#autoStatus {
+    margin-top: 5px;
+    font-size: 12px;
+}
+
+/* ======================================================
+   SECTIONS
+====================================================== */
+
+.section {
+    margin-bottom: 15px;
+}
+
 /* ======================================================
    HEADER
 ====================================================== */
@@ -62,7 +86,6 @@ button {
     justify-content: space-between;
     margin-bottom: 5px;
 }
-
 
 /* ======================================================
    CLOSE BUTTON
@@ -86,13 +109,20 @@ button {
     color: #555;
 }
 
-
-/* ======================================================
-   CLOSE BUTTON HOVER
-====================================================== */
-
 .close-button:hover {
     color: #000;
     background: #eeeeee;
     border-radius: 50%;
+}
+
+/* ======================================================
+   FULL REVIEWS SUB OPTION
+====================================================== */
+
+.sub-option {
+    margin-left: 20px;
+}
+
+.sub-option input[type="checkbox"]:disabled {
+    cursor: not-allowed;
 }

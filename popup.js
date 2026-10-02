@@ -74,7 +74,8 @@ function removeDuplicates(businesses) {
             identifier =
                 business.name
                     .trim()
-                    .toLowerCase();
+                    .toLowerCase()
+                    .replace(/\s+/g, " ");
 
         }
 
@@ -427,31 +428,36 @@ document.getElementById(
 
         await chrome.storage.local.set({
 
-            extractionConfig: {
+        extractionConfig: {
 
-                ...extractionConfig,
+            ...extractionConfig,
 
-                searchQuery:
-                    searchQuery,
+            searchQuery:
+                searchQuery,
 
-                collectBusinessDetails:
-                    document.getElementById(
-                        "collectBusinessDetails"
-                    ).checked,
+            collectBusinessDetails:
+                document.getElementById(
+                    "collectBusinessDetails"
+                ).checked,
 
-                collectReviews:
-                    document.getElementById(
-                        "collectReviews"
-                    ).checked,
+            collectReviews:
+                document.getElementById(
+                    "collectReviews"
+                ).checked,
 
-                collectPhotos:
-                    document.getElementById(
-                        "collectPhotos"
-                    ).checked
+            collectFullReviews:
+                document.getElementById(
+                    "collectFullReviews"
+                ).checked,
 
-            }
+            collectPhotos:
+                document.getElementById(
+                    "collectPhotos"
+                ).checked
 
-        });
+        }
+
+    });
 
 
         console.log(
@@ -621,13 +627,16 @@ document.getElementById(
                         job.search_query,
 
                     collectBusinessDetails:
-                        job.collect_business_details,
+                        job.collect_business_details === true,
 
                     collectReviews:
-                        job.collect_reviews,
+                       job.collect_reviews === true,
+
+                    collectFullReviews:
+                         job.collect_full_reviews === true,
 
                     collectPhotos:
-                        job.collect_photos
+                         job.collect_photos === true
 
                 }
 
@@ -653,20 +662,25 @@ document.getElementById(
             document.getElementById(
                 "collectBusinessDetails"
             ).checked =
-                job.collect_business_details;
+                job.collect_business_details === true;
 
 
             document.getElementById(
                 "collectReviews"
             ).checked =
-                job.collect_reviews;
+                job.collect_reviews === true;
 
+            document.getElementById(
+                "collectFullReviews"
+            ).checked =
+                job.collect_full_reviews === true;
 
             document.getElementById(
                 "collectPhotos"
             ).checked =
-                job.collect_photos;
+                job.collect_photos === true;
 
+            updateFullReviewsState();
 
             jobStatus.textContent =
                 `✓ Job ${job.id} loaded successfully.`;
@@ -694,3 +708,51 @@ document.getElementById(
 
     }
 );
+
+// ======================================================
+// FULL REVIEWS DEPENDS ON REVIEWS
+// ======================================================
+
+const collectReviewsCheckbox =
+    document.getElementById(
+        "collectReviews"
+    );
+
+const collectFullReviewsCheckbox =
+    document.getElementById(
+        "collectFullReviews"
+    );
+
+
+function updateFullReviewsState() {
+
+    if (!collectReviewsCheckbox ||
+        !collectFullReviewsCheckbox) {
+
+        return;
+    }
+
+    collectFullReviewsCheckbox.disabled =
+        !collectReviewsCheckbox.checked;
+
+    if (!collectReviewsCheckbox.checked) {
+
+        collectFullReviewsCheckbox.checked =
+            false;
+
+    }
+
+}
+
+
+if (collectReviewsCheckbox &&
+    collectFullReviewsCheckbox) {
+
+    collectReviewsCheckbox.addEventListener(
+        "change",
+        updateFullReviewsState
+    );
+
+    updateFullReviewsState();
+
+}

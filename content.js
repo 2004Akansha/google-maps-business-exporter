@@ -12,7 +12,9 @@ console.log(
 
 let extractionConfig = {
     jobId: null,
-    sourceId: null
+    sourceId: null,
+    collectReviews: true,
+    collectFullReviews: false
 };
 
 // ======================================================
@@ -145,12 +147,9 @@ function uniqueStrings(values = []) {
     ];
 
 }
-
 function uniqueComments(comments = []) {
 
-    const reviewMap =
-        new Map();
-
+    const reviewMap = new Map();
 
     for (const comment of comments) {
 
@@ -158,10 +157,9 @@ function uniqueComments(comments = []) {
             continue;
         }
 
-
-        // ==================================================
-        // New object format
-        // ==================================================
+        // ================================================
+        // New structured review object
+        // ================================================
 
         if (
             typeof comment === "object" &&
@@ -169,38 +167,26 @@ function uniqueComments(comments = []) {
         ) {
 
             const id =
-                String(
-                    comment.id
-                ).trim();
-
-
-            const text =
-                String(
-                    comment.text || ""
-                ).trim();
-
+                String(comment.id).trim();
 
             if (!id) {
                 continue;
             }
 
-
             reviewMap.set(
                 id,
                 {
-                    id: id,
-                    text: text
+                    ...comment,
+                    id: id
                 }
             );
-
 
             continue;
         }
 
-
-        // ==================================================
+        // ================================================
         // Backward compatibility with old string comments
-        // ==================================================
+        // ================================================
 
         if (
             typeof comment === "string"
@@ -209,31 +195,26 @@ function uniqueComments(comments = []) {
             const text =
                 comment.trim();
 
-
             if (!text) {
                 continue;
             }
 
-
             const fallbackId =
-                "text:" +
-                text;
-
+                "text:" + text;
 
             if (
-                !reviewMap.has(
-                    fallbackId
-                )
+                !reviewMap.has(fallbackId)
             ) {
 
                 reviewMap.set(
                     fallbackId,
                     {
-                        id:
-                            fallbackId,
-
-                        text:
-                            text
+                        id: fallbackId,
+                        author: null,
+                        rating: null,
+                        date: null,
+                        text: text,
+                        ownerResponse: null
                     }
                 );
 
@@ -243,12 +224,11 @@ function uniqueComments(comments = []) {
 
     }
 
-
     return [
         ...reviewMap.values()
     ];
-
 }
+
 function cleanPhone(value) {
 
     if (!value) {
@@ -3545,12 +3525,24 @@ async function extractAllBusinessDetails() {
 
 
     // ==================================================
-    // STEP 1: PHONE + WEBSITE
+    // LOAD EXTRACTION CONFIG
+    // ==================================================
+
+    const config =
+        await loadExtractionConfig();
+
+    console.log(
+        "Extraction config:",
+        config
+    );
+
+
+    // ==================================================
+    // STEP 1: PHONE + WEBSITE + ADDRESS
     // ==================================================
 
     const basicDetails =
         extractDetailsPanel();
-
 
     console.log(
         "Basic details extracted:",
@@ -3566,9 +3558,6 @@ async function extractAllBusinessDetails() {
     let photosUrl = "";
     let photosCollected = false;
 
-    let comments = [];
-    let commentsCollected = false;
-
     try {
 
         photoLinks =
@@ -3578,10 +3567,10 @@ async function extractAllBusinessDetails() {
             extractPhotosUrl();
 
         photosCollected =
-        Boolean(
-            photosUrl ||
-            photoLinks.length > 0
-        );
+            Boolean(
+                photosUrl ||
+                photoLinks.length > 0
+            );
 
         console.log(
             "Photo links found:",
@@ -3593,7 +3582,6 @@ async function extractAllBusinessDetails() {
             photosUrl
         );
 
-
     } catch (error) {
 
         console.error(
@@ -3603,7 +3591,6 @@ async function extractAllBusinessDetails() {
 
         photosCollected =
             false;
-
     }
 
 
@@ -3611,41 +3598,83 @@ async function extractAllBusinessDetails() {
     // STEP 3: REVIEWS
     // ==================================================
 
+    let comments = [];
+    let commentsCollected = false;
 
     try {
 
-        const reviewsOpened =
-            await openReviewsPanel();
+        // --------------------------------------------------
+        // REVIEWS OFF
+        // --------------------------------------------------
 
-
-        console.log(
-            "Reviews opened:",
-            reviewsOpened
-        );
-
-
-        if (reviewsOpened) {
-
-            comments =
-                await scrollReviewsAndCollect();
-
-            commentsCollected =
-                comments.length > 0;
+        if (!config.collectReviews) {
 
             console.log(
-                "Comments found:",
-                comments.length
+                "Reviews collection is disabled."
             );
 
-        } else {
+            comments = [];
+
+            commentsCollected = false;
+
+        }
+
+        // --------------------------------------------------
+        // REVIEWS ON
+        // --------------------------------------------------
+
+        else {
 
             console.log(
-                "Reviews panel could not be opened."
+                "Reviews collection is enabled."
             );
 
-            commentsCollected =
-                false;
+            // Open Reviews panel
+            const reviewsOpened =
+                await openReviewsPanel();
 
+            console.log(
+                "Reviews opened:",
+                reviewsOpened
+            );
+
+
+            if (reviewsOpened) {
+
+                // --------------------------------------------------
+                // FULL REVIEWS / CURRENT REVIEWS
+                // --------------------------------------------------
+
+                comments =
+                    await extractReviewsForBusiness(
+                        config.collectFullReviews
+                    );
+
+                commentsCollected =
+                    comments.length > 0;
+
+                console.log(
+                    "Comments found:",
+                    comments.length
+                );
+
+                console.log(
+                    "Full Reviews mode:",
+                    config.collectFullReviews
+                );
+
+            }
+
+            else {
+
+                console.log(
+                    "Reviews panel could not be opened."
+                );
+
+                comments = [];
+
+                commentsCollected = false;
+            }
         }
 
     } catch (error) {
@@ -3654,23 +3683,22 @@ async function extractAllBusinessDetails() {
             "Review extraction failed:",
             error
         );
-        commentsCollected =
-                false;
 
+        comments = [];
+
+        commentsCollected = false;
     }
 
 
     // ==================================================
-    // FINAL RESULT
+    // STEP 4: FINAL RESULT
     // ==================================================
-    photosUrl =
-        extractPhotosUrl();
-    
+
     const result = {
 
         address:
             basicDetails.address || "",
-        
+
         phone:
             basicDetails.phone || "",
 
@@ -3678,10 +3706,10 @@ async function extractAllBusinessDetails() {
             basicDetails.website || "",
 
         comments:
-            comments || [],
+            comments,
 
         photoLinks:
-            photoLinks || [],
+            photoLinks,
 
         photosUrl:
             photosUrl || "",
@@ -3691,9 +3719,12 @@ async function extractAllBusinessDetails() {
 
         photosCollected:
             photosCollected
-
     };
 
+
+    // ==================================================
+    // DEBUG
+    // ==================================================
 
     console.log(
         "================================="
@@ -3710,7 +3741,6 @@ async function extractAllBusinessDetails() {
 
 
     return result;
-
 }
 
 function waitForCondition(
@@ -5679,126 +5709,357 @@ function findReviewScrollContainer() {
     return null;
 }
 
+async function collectReviewsNormally() {
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "COLLECTING NORMAL REVIEWS"
+    );
+
+    console.log(
+        "================================="
+    );
+
+    expandReviewTexts();
+
+    await new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                500
+            )
+    );
+
+    const comments =
+        extractVisibleComments();
+
+    console.log(
+        "Normal review collection complete."
+    );
+
+    console.log(
+        "Reviews collected:",
+        comments.length
+    );
+
+    return comments;
+
+}
 async function scrollReviewsAndCollect() {
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "FULL REVIEW COLLECTION STARTED"
+    );
+
+    console.log(
+        "================================="
+    );
 
     const container =
         findReviewScrollContainer();
 
-
     if (!container) {
 
-        console.log(
+        console.warn(
             "Review scroll container not found."
         );
 
-        return extractVisibleComments();
+        const fallback =
+            extractVisibleComments();
 
+        console.log(
+            "Fallback reviews collected:",
+            fallback.length
+        );
+
+        return fallback;
     }
 
+    const allComments =
+        new Map();
 
-    const allComments = new Map();
+    let noNewReviewRounds = 0;
 
+    const MAX_NO_NEW_ROUNDS = 3;
 
-    let previousCommentCount = 0;
-    let stableRounds = 0;
-
+    const MAX_SCROLL_ROUNDS = 100;
 
     for (
         let i = 0;
-        i < 50;
+        i < MAX_SCROLL_ROUNDS;
         i++
     ) {
 
-        // ==================================================
-        // Expand currently visible reviews
-        // ==================================================
+        console.log(
+            "---------------------------------"
+        );
 
+        console.log(
+            `FULL REVIEW SCAN ${i + 1}/${MAX_SCROLL_ROUNDS}`
+        );
+
+        console.log(
+            "---------------------------------"
+        );
+
+        const reviewsBefore =
+            allComments.size;
+
+        /*
+         * Expand currently visible "More"
+         * buttons before extracting reviews.
+         */
         expandReviewTexts();
 
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    400
+                )
+        );
 
-        // ==================================================
-        // Extract currently visible comments
-        // ==================================================
-
+        /*
+         * Extract currently visible reviews.
+         */
         const visibleComments =
             extractVisibleComments();
 
+        console.log(
+            "Visible reviews:",
+            visibleComments.length
+        );
+        console.log(
+            "FIRST VISIBLE REVIEW:",
+            visibleComments[0]
+        );
 
-        visibleComments.forEach(comment => {
+        /*
+         * Store reviews using Google's
+         * data-review-id.
+         */
+        for (
+            const comment of visibleComments
+        ) {
 
-            if (comment && comment.id) {
+            if (
+                !comment ||
+                !comment.id
+            ) {
 
-                allComments.set(
-                    comment.id,
-                    comment
-                );
+                continue;
 
             }
 
-        });
+            const reviewId =
+                String(
+                    comment.id
+                ).trim();
 
+            if (!reviewId) {
+                continue;
+            }
+
+            allComments.set(
+                reviewId,
+                {
+                    ...comment,
+                    id: reviewId
+                }
+            );
+
+        }
+
+        const reviewsAfter =
+            allComments.size;
+
+        const newReviews =
+            reviewsAfter -
+            reviewsBefore;
 
         console.log(
-            "Review batch:",
-            i + 1,
-            "Comments collected:",
-            allComments.size
+            "New reviews:",
+            newReviews
         );
 
+        console.log(
+            "Total unique reviews:",
+            reviewsAfter
+        );
 
-        // ==================================================
-        // Check current scroll position
-        // ==================================================
+        /*
+         * If this round discovered no new
+         * review IDs, count a stable round.
+         */
+        if (
+            newReviews === 0
+        ) {
 
+            noNewReviewRounds++;
+
+        } else {
+
+            noNewReviewRounds = 0;
+
+        }
+
+        console.log(
+            "No-new-review rounds:",
+            noNewReviewRounds
+        );
+
+        /*
+         * Find current scroll position.
+         */
         const beforeScrollTop =
             container.scrollTop;
 
         const maxScrollTop =
-            container.scrollHeight -
-            container.clientHeight;
+            Math.max(
+                0,
+                container.scrollHeight -
+                container.clientHeight
+            );
 
-
-        // ==================================================
-        // Already at bottom
-        // ==================================================
+        /*
+         * Check whether we are already
+         * at the bottom.
+         */
+        const reachedBottom =
+            beforeScrollTop >=
+            maxScrollTop - 10;
 
         if (
-            beforeScrollTop >=
-            maxScrollTop - 10
+            reachedBottom
         ) {
 
             console.log(
                 "Review container reached bottom."
             );
 
-            break;
+            /*
+             * Give Google Maps one final
+             * chance to load reviews.
+             */
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        1200
+                    )
+            );
 
+            const finalComments =
+                extractVisibleComments();
+
+            for (
+                const comment of finalComments
+            ) {
+
+                if (
+                    comment &&
+                    comment.id
+                ) {
+
+                    const reviewId =
+                        String(
+                            comment.id
+                        ).trim();
+
+                    if (reviewId) {
+
+                        allComments.set(
+                            reviewId,
+                            {
+                                ...comment,
+                                id: reviewId
+                            }
+                        );
+
+                    }
+
+                }
+
+            }
+
+            console.log(
+                "Final review count:",
+                allComments.size
+            );
+
+            break;
         }
 
+        /*
+         * Stop only after several rounds
+         * produce no new review IDs.
+         */
+        if (
+            noNewReviewRounds >=
+            MAX_NO_NEW_ROUNDS
+        ) {
 
-        // ==================================================
-        // Scroll incrementally
-        // ==================================================
+            console.log(
+                "No new review IDs detected for several rounds."
+            );
 
+            console.log(
+                "Stopping full review collection."
+            );
+
+            break;
+        }
+
+        /*
+         * Scroll close to the next section
+         * of reviews.
+         */
         const scrollAmount =
             Math.max(
                 500,
                 container.clientHeight * 0.8
             );
 
-
-        container.scrollTop =
+        const targetScrollTop =
             Math.min(
                 beforeScrollTop +
                 scrollAmount,
                 maxScrollTop
             );
 
+        console.log(
+            "Scrolling review container:",
+            {
+                from:
+                    beforeScrollTop,
 
-        // ==================================================
-        // Wait for lazy-loaded reviews
-        // ==================================================
+                to:
+                    targetScrollTop,
 
+                max:
+                    maxScrollTop
+            }
+        );
+
+        container.scrollTo({
+            top:
+                targetScrollTop,
+
+            behavior:
+                "auto"
+        });
+
+        /*
+         * Wait for Google Maps to load
+         * newly visible reviews.
+         */
         await new Promise(
             resolve =>
                 setTimeout(
@@ -5806,55 +6067,65 @@ async function scrollReviewsAndCollect() {
                     1200
                 )
         );
+    }
 
+    const result =
+        [
+            ...allComments.values()
+        ];
 
-        // ==================================================
-        // Check whether new comments appeared
-        // ==================================================
+    console.log(
+        "================================="
+    );
 
-        if (
-            allComments.size ===
-            previousCommentCount
-        ) {
+    console.log(
+        "FULL REVIEW COLLECTION FINISHED"
+    );
 
-            stableRounds++;
+    console.log(
+        "TOTAL UNIQUE REVIEWS:",
+        result.length
+    );
 
-        } else {
+    console.log(
+        "================================="
+    );
 
-            stableRounds =
-                0;
+    return result;
 
-        }
+}
+async function extractReviewsForBusiness(
+    collectFullReviews = false
+) {
 
+    console.log(
+        "================================="
+    );
 
-        previousCommentCount =
-            allComments.size;
+    console.log(
+        "REVIEW COLLECTION MODE"
+    );
 
+    console.log(
+        "Full Reviews:",
+        collectFullReviews
+    );
 
-        // ==================================================
-        // Stop after several rounds without progress
-        // ==================================================
+    console.log(
+        "================================="
+    );
 
-        if (
-            stableRounds >= 3
-        ) {
+    if (
+        collectFullReviews
+    ) {
 
-            console.log(
-                "No additional review content detected."
-            );
-
-            break;
-
-        }
+        return await scrollReviewsAndCollect();
 
     }
 
+    return await collectReviewsNormally();
 
-    return [
-        ...allComments.values()
-    ];
 }
-
 async function closeReviewsPanelIfOpen() {
 
     console.log(
@@ -6259,7 +6530,6 @@ function extractVisiblePhotoLinks() {
 // ======================================================
 // LOAD LARAVEL EXTRACTION CONFIGURATION
 // ======================================================
-
 async function loadExtractionConfig() {
 
     const result =
@@ -6285,9 +6555,64 @@ async function loadExtractionConfig() {
 
     }
 
-    return {
+    const collectReviews =
+        config.collectReviews !== false;
+
+    const collectFullReviews =
+        collectReviews &&
+        config.collectFullReviews === true;
+
+    const finalConfig = {
+
         jobId,
-        sourceId
+
+        sourceId,
+
+        searchQuery:
+            config.searchQuery || "",
+
+        collectBusinessDetails:
+            config.collectBusinessDetails !== false,
+
+        collectReviews,
+
+        collectFullReviews,
+
+        collectPhotos:
+            config.collectPhotos !== false
+
     };
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        "LARAVEL EXTRACTION CONFIG"
+    );
+
+    console.log(
+        "================================="
+    );
+
+    console.log(
+        finalConfig
+    );
+
+    console.log(
+        "Reviews:",
+        finalConfig.collectReviews
+    );
+
+    console.log(
+        "Full Reviews:",
+        finalConfig.collectFullReviews
+    );
+
+    console.log(
+        "================================="
+    );
+
+    return finalConfig;
 
 }
